@@ -2,9 +2,16 @@
 
 Status: **Operational proposal based on the approved Discovery baseline**
 
-The goal is to record only durable architectural decisions with meaningful alternatives, avoiding ADR inflation.
+The goal is to identify likely durable architectural decisions while avoiding ADR
+inflation.
 
-## Require ADRs
+An item listed here is an ADR candidate, not an automatic requirement.
+
+Create an ADR only after Discovery identifies a durable decision with meaningful
+alternatives, non-trivial trade-offs, or constraints that should be preserved for
+future work.
+
+## M0 ADR candidates
 
 1. Runtime topology: modular monolith and worker/process isolation.
 2. Endpoint identity and enrollment/trust bootstrap.
@@ -20,7 +27,13 @@ The goal is to record only durable architectural decisions with meaningful alter
 12. Security trust model and destructive-operation boundary.
 13. Boot orchestration boundary between the domain and PXE/GRUB.
 
-## May become ADRs after a technical spike
+Some candidates may be resolved primarily through Specifications rather than
+separate ADRs if Discovery reveals no meaningful architectural alternative.
+
+Related candidates may also be combined into one ADR when they represent one
+coherent architectural decision.
+
+## May become ADRs after a Technical Spike
 
 - definitive WinPE mechanism;
 - Secure Boot or hardened boot chain;
@@ -28,9 +41,13 @@ The goal is to record only durable architectural decisions with meaningful alter
 - switch discovery adapter contract, if alternatives create durable constraints;
 - packaging or service isolation, if implementation reveals a non-trivial long-term choice.
 
+A Technical Spike provides evidence. Its result does not require an ADR unless a
+durable architectural decision remains to be recorded.
+
 ## Do not require ADRs at this stage
 
-These are product, scope, repository-convention, or operational decisions already established by the owner:
+These are product, scope, repository-convention, or operational decisions already
+established by the owner:
 
 - BMProv name and expected component names;
 - Apache-2.0 licensing;
@@ -47,4 +64,8 @@ These are product, scope, repository-convention, or operational decisions alread
 - Debian as the first production Server target;
 - GitHub Project statuses `Backlog`, `Ready`, `In Progress`, `Validation`, and `Done`;
 - SemVer per independently deployable artifact;
-- `SYSTEM`, `CACHE`, and `ARCHIVE` as already approved vocabulary — the storage ADR should define their semantics and capabilities, not reopen their names without new evidence.
+- `SYSTEM`, `CACHE`, and `ARCHIVE` as already approved vocabulary.
+
+If an item in this section later develops meaningful architectural alternatives or
+new constraints, it may be reconsidered through normal SDD rather than because of
+this triage document.
