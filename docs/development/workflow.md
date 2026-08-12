@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define como trabalho BMProv aprovado é executado mantendo controle do owner, rastreabilidade, segurança e handoff entre sessões.
+This document defines how approved BMProv work is executed while preserving owner control, traceability, safety, and handoff between sessions.
 
 ## Operational flow
 
@@ -20,18 +20,18 @@ Approved specification
 
 ## Before editing
 
-1. identifique Specification/parent item aprovado;
-2. identifique o Work Package atual;
-3. confira scope e acceptance criteria;
-4. confira arquitetura implementada e ADRs relevantes;
-5. confira implementação e testes existentes;
-6. confirme que não há decisão arquitetural bloqueadora ainda aberta.
+1. identify the approved Specification or parent item;
+2. identify the current Work Package;
+3. inspect its scope and acceptance criteria;
+4. inspect implemented architecture and relevant ADRs;
+5. inspect existing implementation and tests;
+6. confirm that no unresolved architectural decision blocks the work.
 
 ## Branches
 
-`main` é a stable integration branch.
+`main` is the stable integration branch.
 
-Planejamento normalmente usa:
+Planned work normally uses:
 
 ```text
 feature/<name>
@@ -40,28 +40,28 @@ refactor/<name>
 docs/<name>
 ```
 
-Work Packages normalmente compartilham a branch do parent item e não criam branch por padrão.
+Work Packages normally share the branch of their parent item and do not create a branch by default.
 
 ## In Progress
 
-- implemente apenas o escopo aprovado;
-- acrescente ou atualize testes focados junto do comportamento;
-- use fakes/simulator nas boundaries apropriadas;
+- implement only the approved scope;
+- add or update focused tests together with changed behavior;
+- use fakes and the Simulator at appropriate boundaries;
 - preserve unrelated work;
-- não introduza cleanup, dependencies, translations, release work ou refactors não necessários;
-- reveja diff e falhas antes do handoff.
+- do not introduce unnecessary cleanup, dependencies, translations, release work, or refactors;
+- review the diff and validation failures before handoff.
 
 ## Validation
 
-Antes de `Validation`, automated validation relevante conhecida deve passar.
+Before an item enters `Validation`, known relevant automated validation must pass.
 
-Manual Validation é responsabilidade do owner e é especialmente obrigatória para comportamento que envolve PXE, boot firmware, real disks, Windows/WinPE, hardware específico e destructive workflows.
+Manual Validation is the owner's responsibility and is especially important for behavior involving PXE, boot firmware, real disks, Windows/WinPE, specific hardware, and destructive workflows.
 
 ## Done
 
-`Done` significa aceite manual do owner.
+`Done` means the owner manually accepted the work.
 
-Registre somente outcome útil para trabalho futuro:
+Record only outcome information useful to future work:
 
 ```text
 Outcome
@@ -70,11 +70,11 @@ Manual validation
 Related changes
 ```
 
-Não replique transcript ou diff inteiro.
+Do not reproduce the conversation transcript or the complete code diff.
 
 ## Commits
 
-Use Conventional Commits concisos quando autorizado, por exemplo:
+Use concise Conventional Commits when authorized, for example:
 
 ```text
 feat(agent): add enrollment handshake
@@ -83,4 +83,4 @@ test(protocol): cover duplicate action acknowledgement
 docs(architecture): record storage capability boundary
 ```
 
-Detalhes de execução pertencem ao Work Package, não ao commit message.
+Detailed execution history belongs in the Work Package, not the commit message.

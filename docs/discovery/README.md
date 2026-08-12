@@ -1,5 +1,5 @@
 # Discovery
 
-Esta pasta contém análise técnica anterior à implementação.
+This directory contains technical analysis performed before implementation.
 
-Discovery registra evidências, alternativas, riscos e questões que ainda precisam de decisão. Uma conclusão de Discovery não se torna automaticamente arquitetura atual: decisões duráveis devem seguir o processo de ADR quando aplicável, e comportamento futuro aprovado deve ser materializado em Specification.
+Discovery records evidence, alternatives, risks, and questions that still require decisions. A Discovery conclusion does not automatically become current architecture: durable decisions follow the ADR process when appropriate, and approved future behavior is materialized through Specifications.

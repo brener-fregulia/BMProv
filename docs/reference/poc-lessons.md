@@ -1,52 +1,52 @@
-# Lições validadas pelo FORGE PoC
+# Validated Lessons from the FORGE PoC
 
-O FORGE foi um PoC/TCC anterior e privado. BMProv não copia seu código nem seu histórico; preserva somente conhecimento técnico sanitizado.
+FORGE was a previous private PoC/TCC project. BMProv does not copy its source code or Git history; it preserves only sanitized technical knowledge.
 
-## Evidências que sobrevivem ao redesign
+## Evidence that survives the redesign
 
-- boot diskless de ambiente Alpine em RAM é viável para manutenção;
-- decisão do próximo boot por endpoint é necessária em workflows multi-stage;
-- inventário de storage pode ser significativamente mais lento que inventário básico e não deve bloquear liveness;
-- `/dev/sdX` não é identidade persistente de disco;
-- provisioning deve funcionar sem dependência de CDN/Internet após artifacts locais estarem disponíveis;
-- control plane e large-data transfer possuem requisitos diferentes;
-- CPU, disk, network e storage server podem alternar como bottleneck;
-- concurrency precisa ser gerenciada por capacidade, não por número mágico;
-- enviar payload resumido para visão geral e detalhes sob demanda reduz tráfego e coupling;
-- runtime do Agent atualizável separadamente do initramfs melhora muito o ciclo de desenvolvimento.
+- diskless Alpine boot into RAM is viable for the maintenance environment;
+- selecting the next boot environment per endpoint is necessary for multi-stage workflows;
+- storage inventory can be significantly slower than basic inventory and must not block liveness;
+- `/dev/sdX` is not a persistent disk identity;
+- provisioning must work without CDN or Internet dependency once required artifacts are local;
+- control-plane traffic and large-data transfer have different requirements;
+- CPU, endpoint disk, network, and server storage may each become the bottleneck under different workloads;
+- concurrency must be managed through capacity rather than a magic fixed number;
+- summary payloads for fleet views and detailed payloads on demand reduce traffic and coupling;
+- updating the Agent runtime separately from the initramfs greatly improves development iteration speed.
 
-## Choices do PoC que não são constraints
+## PoC choices that are not constraints
 
-Não herdar automaticamente:
+Do not automatically inherit:
 
 - FastAPI/Python;
 - PostgreSQL;
 - Vanilla JavaScript;
 - WebSocket;
-- HTTP agent em porta específica;
-- raw TCP em range fixo;
-- shell como Agent permanente;
-- `sh -c` remoto;
-- IPs e paths hardcoded;
-- hot cache obrigatório;
+- an Agent HTTP service on a fixed port;
+- raw TCP over a fixed port range;
+- shell as the permanent Agent implementation;
+- remote `sh -c`;
+- hardcoded IP addresses and paths;
+- mandatory hot cache;
 - RAID1;
 - SNMP;
-- zstd com todos os cores;
-- terminal remoto como capability normal.
+- zstd using all CPU cores;
+- remote terminal as a normal production capability.
 
-## Architectural mistakes a evitar
+## Architectural mistakes to avoid
 
-- transport connection misturada ao domain/runtime state;
-- orchestration dentro de HTTP routes;
-- global state como boundary principal;
-- filesystem/subprocess/networking diretamente acoplados à apresentação;
-- arbitrary remote shell;
-- MAC tratado como identity/trust anchor;
-- ausência de autenticação;
-- destructive operations sem safety boundary explícita;
-- storage layout hardcoded;
-- concorrência implícita por portas/processos;
-- CPU-heavy work sem quotas;
-- blocking work capaz de afetar control plane;
-- depender do servidor físico para desenvolvimento;
-- testes introduzidos tarde.
+- transport connections mixed with domain/runtime state;
+- orchestration implemented directly inside HTTP routes;
+- global mutable state used as a primary architectural boundary;
+- filesystem, subprocess, and networking concerns coupled directly to presentation/API code;
+- arbitrary remote shell execution;
+- MAC address treated as identity or a trust anchor;
+- no authentication boundary;
+- destructive operations without explicit safety invariants;
+- hardcoded storage layout;
+- concurrency implicitly controlled by ports or process counts;
+- CPU-heavy work without quotas;
+- blocking/heavy work capable of starving the control plane;
+- dependence on the physical Server for normal development;
+- automated tests introduced late.

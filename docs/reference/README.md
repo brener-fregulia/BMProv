@@ -1,5 +1,5 @@
 # Reference
 
-Esta pasta preserva conhecimento factual validado que ajuda integração e manutenção, mas não constitui requirement arquitetural universal.
+This directory preserves validated factual knowledge that helps integration and maintenance but does not define universal BMProv architectural requirements.
 
-Exemplos: hardware quirks, boot compatibility, benchmarks e lessons learned do FORGE PoC.
+Examples include hardware quirks, boot compatibility, benchmarks, and lessons learned from the previous FORGE PoC.

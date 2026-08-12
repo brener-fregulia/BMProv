@@ -1,7 +1,7 @@
 # Specifications
 
-Specifications descrevem trabalho futuro aprovado antes da implementação.
+Specifications describe approved future work before implementation.
 
-Use somente seções que tragam informação útil, como Contexto, Objetivo, Escopo, Fora de escopo, RF/RNF/RN, Acceptance Criteria, impacto arquitetural, ADRs relacionados e decomposição em Work Packages.
+Use only sections that add useful information, such as Context, Goal, Scope, Out of scope, RF/RNF/RN, Acceptance Criteria, architecture impact, related ADRs, and Work Package decomposition.
 
-Antes da aprovação do owner, uma Specification é proposta.
+Before owner approval, a Specification is a proposal.

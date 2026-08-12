@@ -1,18 +1,18 @@
 # Architectural Decision Records
 
-ADRs preservam decisões técnicas significativas para que constraints duráveis não sejam redescobertas ou alteradas silenciosamente em sessões futuras.
+ADRs preserve significant technical decisions so durable constraints are not repeatedly rediscovered or silently changed in future sessions.
 
-## Quando criar
+## When to create an ADR
 
-Crie ADR quando uma decisão:
+Create an ADR when a decision:
 
-- estabelece ou muda boundary arquitetural durável;
-- possui alternativas relevantes ou trade-offs não triviais;
-- condiciona futuras implementações;
-- adota ou rejeita tecnologia/estratégia significativa;
-- é provável que seja questionada novamente.
+- establishes or changes a durable architectural boundary;
+- has meaningful alternatives or non-trivial trade-offs;
+- constrains future implementation choices;
+- adopts or rejects a significant technology or strategy;
+- is likely to be questioned again.
 
-Não crie ADR para naming rotineiro, formatação, idioma de documentação, escopo de release ou detalhes reversíveis de implementação.
+Do not create ADRs for routine naming, formatting, documentation language, release scope, or reversible implementation details.
 
 ## Naming
 
@@ -21,7 +21,7 @@ Não crie ADR para naming rotineiro, formatação, idioma de documentação, esc
 0002-another-decision.md
 ```
 
-Números não são reutilizados.
+Numbers are never reused.
 
 ## Status
 
@@ -31,36 +31,36 @@ Números não são reutilizados.
 - `Deprecated`
 - `Rejected`
 
-Decisão Accepted só deve ser reaberta com requisito, constraint ou evidência nova.
+An `Accepted` decision should be reconsidered only when new requirements, constraints, or evidence justify doing so.
 
-## Estrutura
+## Structure
 
 ```markdown
-# ADR-NNNN: Título
+# ADR-NNNN: Decision title
 
 Status: Proposed
 
-## Contexto
+## Context
 
-## Decisão
+## Decision
 
-## Alternativas consideradas
+## Alternatives considered
 
-## Consequências
+## Consequences
 
-## Arquitetura relacionada
+## Related architecture
 
-## Trabalho relacionado
+## Related work
 ```
 
-## SDD
+## SDD relationship
 
-Se uma decisão arquitetural surgir durante implementação:
+If an architectural decision emerges during implementation:
 
-1. registre a questão no Work Package;
-2. confira ADRs existentes;
-3. interrompa somente a escolha afetada;
-4. documente alternativas;
-5. obtenha aprovação do owner;
-6. crie/atualize o ADR;
-7. continue a implementação.
+1. record the question in the Work Package;
+2. inspect existing ADRs;
+3. stop only the affected architectural choice;
+4. document the alternatives;
+5. obtain owner approval;
+6. create or update the ADR;
+7. continue implementation.

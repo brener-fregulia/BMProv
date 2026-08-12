@@ -1,50 +1,50 @@
-# Triagem de ADRs para M0
+# M0 ADR Triage
 
-Status: **Proposta operacional baseada no Discovery aprovado**
+Status: **Operational proposal based on the approved Discovery baseline**
 
-O objetivo é registrar somente decisões arquiteturais duráveis com alternativas relevantes, evitando ADR inflation.
+The goal is to record only durable architectural decisions with meaningful alternatives, avoiding ADR inflation.
 
-## Requerem ADR
+## Require ADRs
 
-1. Runtime topology: modular monolith e isolamento de workers/processos.
-2. Endpoint identity e enrollment/trust bootstrap.
+1. Runtime topology: modular monolith and worker/process isolation.
+2. Endpoint identity and enrollment/trust bootstrap.
 3. Agent control protocol.
-4. Agent typed-action model, idempotency, retry e cancellation.
+4. Agent typed-action model, idempotency, retry, and cancellation.
 5. Backend/Agent language strategy.
-6. Persistence strategy para standalone.
+6. Persistence strategy for standalone deployments.
 7. Durable Job/JobStep state model.
-8. Data-plane/transfer protocol.
-9. Transfer resumability/snapshot-format strategy.
-10. Storage roles/capability model.
-11. Scheduler/resource lease model.
-12. Security trust model e destructive-operation boundary.
-13. Boot orchestration boundary entre domínio e PXE/GRUB.
+8. Data-plane and transfer protocol.
+9. Transfer resumability and snapshot-format strategy.
+10. Storage roles and capability model.
+11. Scheduler and resource-lease model.
+12. Security trust model and destructive-operation boundary.
+13. Boot orchestration boundary between the domain and PXE/GRUB.
 
-## Podem virar ADR quando o spike produzir decisão
+## May become ADRs after a technical spike
 
-- mecanismo WinPE;
-- Secure Boot / hardened boot chain;
-- driver provider integration;
-- switch discovery adapter contract, se as alternativas criarem constraint durável;
-- packaging/service isolation se a implementação exigir escolha não trivial.
+- definitive WinPE mechanism;
+- Secure Boot or hardened boot chain;
+- driver-provider integration;
+- switch discovery adapter contract, if alternatives create durable constraints;
+- packaging or service isolation, if implementation reveals a non-trivial long-term choice.
 
-## Não precisam de ADR neste momento
+## Do not require ADRs at this stage
 
-Estas são decisões de produto, escopo, convenção ou operação já estabelecidas pelo owner:
+These are product, scope, repository-convention, or operational decisions already established by the owner:
 
-- nome BMProv e nomes esperados dos componentes;
-- Apache-2.0;
-- documentação em pt-BR inicialmente;
-- source/API/protocol identifiers em inglês;
-- UI `pt-BR` inicialmente com `en-US` planejado;
-- Windows 11 como alvo primário de V1;
-- UEFI x86-64 em V1;
-- Legacy BIOS fora do escopo V1;
-- HA fora do escopo V1;
-- dedicated provisioning network/interface/VLAN como hipótese inicial;
-- Internet não garantida;
-- Server único inicialmente;
-- Debian como primeiro target de produção;
-- GitHub Project com Backlog, Ready, In Progress, Validation e Done;
-- SemVer por artifact independently deployable;
-- `SYSTEM`, `CACHE`, `ARCHIVE` como vocabulário já aprovado — o ADR de storage deve decidir semântica/capabilities, não rediscutir esses nomes sem nova evidência.
+- BMProv name and expected component names;
+- Apache-2.0 licensing;
+- canonical repository and engineering documentation in English;
+- source/API/protocol identifiers in English;
+- initial UI locale `pt-BR`, with `en-US` planned;
+- Windows 11 as the primary V1 provisioning target;
+- UEFI x86-64 for V1;
+- Legacy BIOS outside V1 scope;
+- HA outside V1 scope;
+- a dedicated provisioning network/interface/VLAN as the initial deployment assumption;
+- Internet access is not guaranteed;
+- a single Server node initially;
+- Debian as the first production Server target;
+- GitHub Project statuses `Backlog`, `Ready`, `In Progress`, `Validation`, and `Done`;
+- SemVer per independently deployable artifact;
+- `SYSTEM`, `CACHE`, and `ARCHIVE` as already approved vocabulary — the storage ADR should define their semantics and capabilities, not reopen their names without new evidence.

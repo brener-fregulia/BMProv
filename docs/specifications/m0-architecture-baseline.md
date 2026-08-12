@@ -1,29 +1,29 @@
 # M0 — Architecture Baseline & Simulated Provisioning Contract
 
-Status: **Approved milestone scope; internal decisions remain to be resolved through ADRs/specifications**
+Status: **Approved milestone scope; internal decisions remain to be resolved through ADRs and Specifications**
 
 ## Goal
 
-Transformar o Discovery em uma baseline arquitetural e de contratos aprovada pelo owner antes do primeiro Work Package de implementação.
+Transform Discovery into an owner-approved architectural and contract baseline before the first implementation Work Package.
 
 ## Scope
 
-M0 deve resolver ou isolar explicitamente:
+M0 must resolve or explicitly isolate:
 
-- product boundary e domain vocabulary;
+- product boundary and domain vocabulary;
 - Endpoint identity;
 - Job/JobStep lifecycle;
-- scheduler/resource model;
+- scheduler and resource model;
 - Agent action model;
 - control-plane contract;
 - data-plane contract;
-- persistence;
-- backend/Agent stack;
-- security/trust model;
+- persistence strategy;
+- Backend/Agent stack;
+- security and trust model;
 - storage capabilities;
 - Simulator contract;
-- observability/domain events;
-- packaging/versioning baseline;
+- observability and domain-event model;
+- packaging and versioning baseline;
 - testing policy.
 
 ## Out of scope
@@ -33,38 +33,38 @@ M0 deve resolver ou isolar explicitamente:
 - real Windows installation;
 - WinPE implementation;
 - MikroTik-specific production adapter;
-- production backup format;
+- final production backup format;
 - ERP;
 - licensing enforcement;
-- multi-site;
+- multi-site management;
 - HA;
 - Tauri.
 
 ## Required technical spikes
 
-Questões que exigirem evidência empírica devem virar spikes explícitos, especialmente:
+Questions requiring empirical evidence must become explicit spikes, especially:
 
 - WinPE mechanism;
 - resumable volume/image transfer format;
-- Secure Boot/hardened boot chain quando exigido;
-- driver provider integrations.
+- Secure Boot or hardened boot chain when required;
+- driver-provider integrations.
 
 ## Acceptance criteria
 
-M0 está concluído quando:
+M0 is complete when:
 
-1. product boundary, vocabulary e non-goals estão persistidos;
-2. ADRs bloqueadores estão Accepted ou a questão está isolada em spike explícito;
-3. destructive operations possuem safety invariants especificados;
-4. simulated vertical slice possui comportamento, contracts e failure scenarios definidos;
-5. responsibilities e boundaries dos componentes estão claros;
-6. requisitos relevantes possuem estratégia de validação;
-7. nenhuma decisão arquitetural necessária está escondida em futuro Work Package;
-8. o owner aprova explicitamente a baseline.
+1. product boundary, vocabulary, and non-goals are persisted;
+2. blocking ADRs are `Accepted` or the unresolved question is isolated in an explicit technical spike;
+3. destructive operations have specified safety invariants;
+4. the simulated vertical slice has defined behavior, contracts, and failure scenarios;
+5. component responsibilities and boundaries are clear;
+6. relevant requirements have a validation strategy;
+7. no required architectural decision is hidden inside a future implementation Work Package;
+8. the owner explicitly approves the baseline.
 
 ## First implementation slice after M0
 
-O primeiro vertical slice posterior deve funcionar sem hardware real:
+The first implementation vertical slice must work without real hardware:
 
 ```text
 Simulated endpoint connects
@@ -80,4 +80,4 @@ Simulated endpoint connects
 → Web reflects result
 ```
 
-O slice deve admitir cenário de 20–24 simulated endpoints concorrentes.
+The slice must support a scenario with 20–24 concurrent simulated endpoints.

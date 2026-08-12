@@ -16,20 +16,20 @@ Production provisioning is not implemented yet.
 
 The initial production target is:
 
-* Windows provisioning;
-* UEFI x86-64 endpoints;
-* Linux-based BMProv Server;
-* browser-based administration;
-* standalone, single-server deployments.
+- Windows provisioning;
+- UEFI x86-64 endpoints;
+- Linux-based BMProv Server;
+- browser-based administration;
+- standalone, single-server deployments.
 
 ## Components
 
 BMProv is expected to consist of independently evolvable components such as:
 
-* **BMProv Server**
-* **BMProv Web**
-* **BMProv Agent**
-* **BMProv Simulator**
+- **BMProv Server**
+- **BMProv Web**
+- **BMProv Agent**
+- **BMProv Simulator**
 
 The exact implementation architecture is still being defined through Specification-Driven Development and Architecture Decision Records.
 

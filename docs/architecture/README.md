@@ -2,21 +2,21 @@
 
 ## Purpose
 
-Esta pasta documenta somente a arquitetura técnica **implementada e validada** do BMProv.
+This directory documents only BMProv technical architecture that is **implemented and validated**.
 
-No bootstrap inicial ainda não existe arquitetura de aplicação implementada. A arquitetura proposta permanece em `docs/discovery/`, Specifications e ADRs até existir código validado correspondente.
+At the initial bootstrap stage, there is no implemented application architecture yet. Proposed architecture remains in `docs/discovery/`, Specifications, and ADRs until corresponding validated code exists.
 
 ## Source of truth
 
-Quando implementação existir, código e testes serão a fonte final do comportamento atual. Antes de atualizar esta pasta:
+Once implementation exists, code and tests are the ultimate source of truth for current behavior. Before updating this directory:
 
-- confira a implementação real;
-- confira ADRs relacionados;
-- diferencie comportamento implementado de planejamento;
-- não invente módulos, paths, APIs ou boundaries ainda inexistentes.
+- inspect the actual implementation;
+- inspect related ADRs;
+- distinguish implemented behavior from planned work;
+- do not invent modules, paths, APIs, or boundaries that do not yet exist.
 
 ## Relationship with ADRs
 
-Arquitetura responde: **como o BMProv funciona agora?**
+Architecture documentation answers: **How does BMProv work now?**
 
-ADR responde: **por que uma decisão arquitetural significativa foi escolhida e quais constraints ela estabeleceu?**
+An ADR answers: **Why was a significant architectural decision chosen, and what constraints did it establish?**

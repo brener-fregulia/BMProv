@@ -1,208 +1,208 @@
 # BMProv — Architecture Discovery Baseline
 
-Status: **Baseline de Discovery atualizada com decisões do owner**
+Status: **Discovery baseline updated with owner decisions**
 
-## Contexto
+## Context
 
-BMProv é uma implementação nova, sem histórico Git ou código herdado do FORGE. O PoC anterior é evidência técnica: comportamento validado, limitações, workarounds e erros arquiteturais. Ele não é uma compatibility constraint.
+BMProv is a clean implementation with no inherited Git history or source code from FORGE. The previous PoC is technical evidence: validated behavior, limitations, workarounds, and architectural mistakes. It is not a compatibility constraint.
 
-## Boundary do produto
+## Product boundary
 
-BMProv é uma plataforma standalone de bare-metal provisioning e recovery para redes locais controladas. Ela deve descobrir e identificar endpoints, coordenar boot e ambientes de manutenção, coletar inventário, executar workflows, transferir e gerenciar artifacts, agendar recursos concorrentes e oferecer operação segura, observável e auditável por API e interface web.
+BMProv is a standalone bare-metal provisioning and recovery platform for controlled local networks. It should discover and identify endpoints, coordinate boot and maintenance environments, collect inventory, execute provisioning and recovery workflows, transfer and manage artifacts, schedule concurrent resources, and provide secure, observable, auditable operation through an API and web interface.
 
 BMProv V1:
 
-- provisiona Windows, com Windows 11 como alvo moderno primário;
-- suporta UEFI x86-64;
-- opera inicialmente em servidor único;
-- assume interface/VLAN/rede dedicada de provisioning onde BMProv pode controlar DHCP/PXE;
-- não depende de Internet quando os artifacts necessários já estão locais;
-- não exige MikroTik, hot cache, cold storage, RAID, PostgreSQL ou WebSocket.
+- provisions Windows, with Windows 11 as the primary modern target;
+- supports UEFI x86-64 endpoints;
+- initially operates as a single-server deployment;
+- assumes a dedicated provisioning interface/VLAN/network where BMProv may control DHCP/PXE;
+- does not depend on Internet access once required artifacts are available locally;
+- does not require MikroTik hardware, dedicated hot cache, dedicated archive storage, RAID, PostgreSQL, or WebSocket.
 
-BMProv não é ERP, CRM, sistema financeiro, RMM genérico, NAS, gerenciador geral de switches ou plataforma multi-site V1. Um futuro ERP deve integrar por API pública/versionada e domain events, nunca pelo banco interno.
+BMProv is not an ERP, CRM, financial system, general-purpose RMM, NAS, general switch manager, or V1 multi-site platform. A future ERP must integrate through a public/versioned API and domain events, never through BMProv's internal database.
 
-## Component boundaries propostos
+## Proposed component boundaries
 
-Antes de tecnologia definitiva, as responsabilidades são separadas em:
+Before final technology choices, responsibilities are separated into:
 
-- Presentation: Web Administration e Administrative API;
-- Application: Endpoint Management, Provisioning/Recovery Orchestration, Boot Orchestration e Artifact Management;
-- Domain: Endpoint, Job, JobStep, Attempt, Inventory, Artifact/Snapshot, Transfer, Storage Target e Domain Events;
-- Runtime Services: Scheduler/Resource Arbiter, Agent Control Gateway, Transfer Coordinator e Runtime Presence Registry;
-- Ports: repositories, Agent transport, boot, discovery, storage e infrastructure metrics;
-- Adapters: persistence, PXE/GRUB, switch integration, filesystem/storage e protocol transports;
-- Workers: transfer, compression, verification e artifact movement.
+- Presentation: Web Administration and Administrative API;
+- Application: Endpoint Management, Provisioning/Recovery Orchestration, Boot Orchestration, and Artifact Management;
+- Domain: Endpoint, Job, JobStep, Attempt, Inventory, Artifact/Snapshot, Transfer, Storage Target, and Domain Events;
+- Runtime Services: Scheduler/Resource Arbiter, Agent Control Gateway, Transfer Coordinator, and Runtime Presence Registry;
+- Ports: repositories, Agent transport, boot, discovery, storage, and infrastructure metrics;
+- Adapters: persistence, PXE/GRUB, switch integration, filesystem/storage, and protocol transports;
+- Workers: transfer, compression, verification, and artifact movement.
 
-O domínio não deve conhecer GRUB, MikroTik, `/dev/sda`, `snmpwalk`, WebSocket, SQLite ou zstd.
+The domain must not know about GRUB, MikroTik, `/dev/sda`, `snmpwalk`, WebSocket, SQLite, or zstd.
 
-## Runtime direction aceita
+## Accepted runtime direction
 
-A direção inicial é **modular monolith first**, com boundaries internas explícitas e isolamento por processo/worker para cargas pesadas quando necessário.
+The initial direction is **modular monolith first**, with explicit internal boundaries and process/worker isolation for heavy workloads when required.
 
-Microservices, clustering, Redis, leader election e distributed scheduler não são requisitos V1.
+Microservices, clustering, Redis, leader election, and a distributed scheduler are not V1 requirements.
 
-Workers pertencem inicialmente à release do Server e não recebem versionamento independente.
+Workers initially belong to the BMProv Server release and do not receive independent versioning.
 
 ## Development architecture
 
-O laboratório físico é Integration Environment.
+The physical laboratory is an Integration Environment.
 
-O desenvolvimento normal deve funcionar sem PXE real, MikroTik, clientes reais ou discos destrutivos por meio de:
+Normal development must work without real PXE, MikroTik hardware, real clients, or destructive disks through:
 
 - simulated agents;
-- fake boot/discovery/storage adapters;
+- fake boot, discovery, and storage adapters;
 - temporary local storage;
 - deterministic fixtures;
-- simulação de 20–24+ endpoints;
-- cenários de latency, throughput, disconnect, reconnect, retries, failure e storage pressure.
+- simulation of 20–24+ endpoints;
+- scenarios for latency, throughput, disconnect, reconnect, retries, failures, and storage pressure.
 
 ## Frontend
 
-Direção aceita, salvo blocker concreto descoberto posteriormente:
+Accepted direction unless a concrete blocker is discovered later:
 
 - TypeScript;
 - Svelte;
 - Vite;
 - Vitest;
-- administração browser-first.
+- browser-first administration.
 
-BMProv Web é independently deployable/updateable em relação ao Server. Um bugfix exclusivamente Web não deve exigir reiniciar jobs do Server.
+BMProv Web is independently deployable and updateable from BMProv Server. A Web-only bugfix should not require restarting Server jobs.
 
-## Backend e Agent
+## Backend and Agent
 
-Ainda não decididos.
+Still undecided.
 
-Candidatos principais: Rust, Go e Python. Antes de aceitar arquitetura polyglot, deve-se avaliar se uma única linguagem atende razoavelmente Server e Agent, considerando que o projeto possui um único mantenedor principal.
+Primary candidates are Rust, Go, and Python. Before accepting a polyglot architecture, M0 should evaluate whether one language can reasonably serve both Server and Agent, considering that the project currently has one primary maintainer.
 
-O Agent permanente não deve aceitar `sh -c` arbitrário vindo do Server. A direção é um supervisor com actions tipadas, autenticação, state machine, retries, cancellation e process supervision, podendo invocar ferramentas fixas do ambiente Alpine.
+The permanent Agent must not accept arbitrary `sh -c` execution from the Server. The direction is a supervisor with typed actions, authentication, a state machine, retries, cancellation, and process supervision, while still being able to invoke fixed tools available in the Alpine maintenance environment.
 
 ## Control plane
 
-A escolha de protocolo continua aberta e deve ser feita por ADR.
+The protocol choice remains open and requires an ADR.
 
-Browser e Agent não precisam usar o mesmo mecanismo.
+Browser and Agent do not need to use the same mechanism.
 
-Candidatos relevantes:
+Relevant candidates include:
 
 - REST + polling;
 - REST + long polling;
-- WebSocket com protocolo tipado;
-- SSE para eventos browser + HTTP para commands.
+- WebSocket with a typed application protocol;
+- SSE for browser events + HTTP commands.
 
-Qualquer Agent Protocol deve especificar correlation, acknowledgement, duplicate handling, timeout, reconnect, cancellation, progress, version e idempotency semantics.
+Any Agent Protocol must define correlation, acknowledgement, duplicate handling, timeout, reconnect, cancellation, progress, protocol version, and idempotency semantics.
 
 ## Data plane
 
-Grandes transfers ficam separados do control plane.
+Large transfers remain separate from the control plane.
 
-HTTP streaming/chunk-oriented transfer é direção forte, mas resumability não pode ser fingida por byte offset quando a fonte não consegue reproduzir o stream a partir daquele ponto.
+HTTP streaming or chunk-oriented transfer is a strong direction, but resumability must not be faked through byte offsets when the source cannot reproduce the stream from an arbitrary offset.
 
-Production V1 deve oferecer resume/checkpoint para grandes transfers quando tecnicamente possível. Volume-image e selective/chunked backup podem exigir estratégias diferentes.
+Production V1 should support resume/checkpoint for large transfers where technically possible. Volume/image backup and selective/chunked backup may require different strategies.
 
 ## Persistence
 
-Durable domain state/history deve ser separado de runtime connection/presence state.
+Durable domain state and history must be separated from runtime connection and presence state.
 
-SQLite é candidato forte para o standalone single-node; PostgreSQL continua alternativa se requisitos concretos de concorrência, remote DB, HA ou multi-site aparecerem. A decisão permanece ADR de M0.
+SQLite is a strong candidate for standalone single-node deployments. PostgreSQL remains an alternative if concrete requirements for heavier write concurrency, remote database operation, HA, or multi-site emerge. The final choice remains an M0 ADR.
 
 ## Storage
 
-Papéis lógicos aceitos:
+Accepted logical roles:
 
 - `SYSTEM`;
 - `CACHE`;
 - `ARCHIVE`.
 
-CACHE e ARCHIVE dedicados são opcionais. Um único SSD/NVMe pode cumprir múltiplos papéis em instalação pequena. Hardware layout é configuração de instalação.
+Dedicated CACHE and ARCHIVE storage are optional. A single SSD/NVMe may fulfill multiple roles in a Small installation. Physical hardware layout is installation configuration, not domain architecture.
 
-Storage providers devem expor capabilities em vez de assumptions sobre RAID ou device names.
+Storage providers should expose capabilities rather than assumptions about RAID layouts or device names.
 
 ## Capacity and scheduling
 
-Perfis iniciais de instalação:
+Initial installation profiles:
 
-- Small: ~3–5 endpoints ativos;
-- Medium: ~8–10;
-- High-density: ~20–24.
+- Small: approximately 3–5 active endpoints;
+- Medium: approximately 8–10;
+- High-density: approximately 20–24.
 
-8 GB é o baseline mínimo pretendido do host completo para Small, sujeito a medição antes de 1.0.
+8 GB is the intended minimum complete-host baseline for Small, subject to measurement before 1.0.
 
-Concorrência não deve ser um número global fixo. JobSteps devem competir por resource leases/tokens representando endpoint exclusivity, network, storage read/write, CPU/worker capacity e outros recursos relevantes.
+Concurrency must not be a single fixed global number. JobSteps should compete for resource leases or tokens representing endpoint exclusivity, network capacity, storage read/write capacity, CPU/worker capacity, and other relevant constrained resources.
 
 ## Security invariants
 
-A LAN de provisioning é controlada, mas não confiável por definição.
+The provisioning LAN is controlled but not inherently trustworthy.
 
-- MAC não é autenticação nem identidade permanente;
-- Server e Agent precisam autenticar-se;
-- operações destrutivas precisam validar Endpoint, inventory revision e disk identity/fingerprint;
-- reconnect não pode causar replay cego de comando destrutivo;
-- Agent actions devem ser tipadas;
-- backups críticos precisam de integrity verification antes de provisioning destrutivo;
-- PTY/shell remoto, se existir, é break-glass e disabled by default;
-- boot-chain integrity é requisito, embora Secure Boot não seja requisito M0.
+- MAC addresses are not authentication or permanent identity;
+- Server and Agent must authenticate each other appropriately;
+- destructive operations must validate Endpoint identity, inventory revision, and disk identity/fingerprint;
+- reconnect must not blindly replay destructive commands;
+- Agent actions must be typed;
+- critical backups must pass integrity verification before destructive provisioning proceeds;
+- remote PTY/shell access, if retained, is break-glass functionality and disabled by default;
+- boot-chain integrity is a requirement even though Secure Boot itself is not an M0 implementation requirement.
 
 ## Endpoint identity
 
-A identidade deve sobreviver à troca de NIC/MAC.
+Endpoint identity must survive NIC or MAC replacement.
 
-Direção para ADR:
+Direction to evaluate through ADR:
 
-1. Boot Orchestrator cria contexto/credential de enrollment curto;
-2. Agent autentica o Server;
-3. Agent resgata credential curto;
-4. runtime identity/session credential é estabelecida;
-5. MAC e hardware fingerprints permanecem sinais de inventário, não trust anchors.
+1. Boot Orchestrator creates a short-lived enrollment context or credential;
+2. Agent authenticates the Server;
+3. Agent redeems the short-lived credential;
+4. a runtime Agent identity/session credential is established;
+5. MAC addresses and hardware fingerprints remain inventory signals rather than trust anchors.
 
 ## Backup model
 
-Não existe `backup=true` genérico.
+There is no generic `backup=true` semantic.
 
-Estratégias mínimas a especificar separadamente:
+Minimum strategies to specify independently:
 
 - Volume/Image backup;
 - Selective backup.
 
-Todo artifact completo precisa de metadata/expected size quando aplicável, cryptographic digest, estado incompleto explícito, commit atômico e verification state.
+Every completed artifact requires metadata, expected size when applicable, a cryptographic digest, explicit incomplete state, atomic completion/commit semantics, and an explicit verification state.
 
 ## Durable workflow
 
-Cada estágio relevante de provisioning é um JobStep com preconditions, execution state, result, postconditions, retry semantics e cancellation semantics.
+Each relevant provisioning stage is a JobStep with preconditions, execution state, result, postconditions, retry semantics, and cancellation semantics.
 
-Após power loss ou reconnect, o Server deve reconciliar estado real e durable state. Operações destrutivas não recebem retry automático apenas por política genérica.
+After power loss or reconnect, the Server must reconcile actual endpoint state with durable workflow state. Destructive operations must never be automatically retried merely because a generic retry policy exists.
 
 ## Observability
 
-Correlation deve permitir relacionar endpoint, job, step, attempt, action e transfer.
+Correlation must make it possible to relate endpoint, job, step, attempt, action, and transfer.
 
-Eventos de domínio duráveis devem existir quando úteis ao próprio produto e às integrações futuras, por exemplo provisioning completed/failed, artifact created/verified e inventory updated.
+Durable domain events should exist when they are useful to the product itself and future integrations, for example provisioning completed/failed, artifact created/verified, and inventory updated.
 
-Telemetria de alta frequência não precisa ser persistida indefinidamente.
+High-frequency telemetry does not need to be persisted indefinitely.
 
-## Open source / commercial boundary
+## Open-source and commercial boundary
 
-O standalone BMProv permanece genuinamente útil no open source: Server, Agent, Web, orchestration, scheduler, backup/recovery, artifact handling, Simulator, API, adapters básicos e observability essencial.
+Standalone BMProv remains genuinely useful as open-source software, including Server, Agent, Web, orchestration, scheduler, backup/recovery, artifact handling, Simulator, API, basic adapters, and essential observability.
 
-Futuras diferenciações comerciais podem existir acima ou ao redor do engine: ERP, multi-site, centralized management, advanced reporting, hosted services, support e specialized integrations.
+Future commercial differentiation may exist above or around the engine, including ERP integration, multi-site management, centralized management, advanced reporting, hosted services, support, and specialized integrations.
 
-Não criar forks condicionais por cliente.
+Do not create customer-conditional forks or code paths such as `if customer == X`.
 
 ## Packaging and versioning
 
-Direção aceita:
+Accepted direction:
 
-- Server Linux, Debian como target inicial;
-- `.deb` e APT repository assinada como distribuição eventual;
-- sem self-updater silencioso do Server;
-- Server, Web e Agent com SemVer independente;
-- contracts versionados separadamente, por exemplo Administrative API v1 e Agent Protocol v1;
-- sem lockstep de releases.
+- Linux Server, with Debian as the initial production target;
+- native `.deb` packages and a signed APT repository as the eventual distribution model;
+- no silent application-level self-updater for the Server;
+- independent SemVer for Server, Web, and Agent;
+- contracts versioned separately, for example Administrative API v1 and Agent Protocol v1;
+- no lockstep releases between independently deployable components.
 
-## Spikes explicitamente isolados
+## Explicitly isolated technical spikes
 
-Não podem ser decididos silenciosamente durante implementação:
+The following questions must not be silently decided during implementation:
 
-- mecanismo definitivo de WinPE;
-- transfer/snapshot resumability quando o produtor não suporta restart arbitrário;
-- Secure Boot/hardened boot chain;
-- driver provider integration.
+- definitive WinPE mechanism;
+- transfer/snapshot resumability when the producer cannot support arbitrary restart;
+- Secure Boot or a hardened boot-chain strategy;
+- driver-provider integration.

@@ -17,33 +17,33 @@ Implementation and tests are the source of truth for currently implemented behav
 
 After approved work is materialized:
 
-* GitHub Issues store approved specifications and Work Packages;
-* GitHub Projects store operational workflow state and progress;
-* GitHub Milestones group milestones or releases when applicable.
+- GitHub Issues store approved specifications and Work Packages;
+- GitHub Projects store operational workflow state and progress;
+- GitHub Milestones group milestones or releases when applicable.
 
 An AI session must never be the only place containing information required to understand, continue, validate, or maintain relevant work.
 
 Before proposing or making changes:
 
-* inspect the relevant implementation and nearby tests when they exist;
-* read only the documentation needed for the task;
-* inspect relevant architecture documents and ADRs;
-* verify paths, commands, configuration, and conventions in the repository;
-* report conflicts between the request, specification, ADRs, documentation, and actual repository state;
-* do not invent files, APIs, behavior, requirements, commands, conventions, or validation results.
+- inspect the relevant implementation and nearby tests when they exist;
+- read only the documentation needed for the task;
+- inspect relevant architecture documents and ADRs;
+- verify paths, commands, configuration, and conventions in the repository;
+- report conflicts between the request, specification, ADRs, documentation, and actual repository state;
+- do not invent files, APIs, behavior, requirements, commands, conventions, or validation results.
 
 ## Scope and SDD
 
 Follow `docs/development/sdd.md`.
 
-* Discovery is analysis, not implementation.
-* Non-trivial work must have sufficient specification before implementation.
-* Explicit owner approval is required before approved work is materialized or planned implementation begins.
-* Implement one approved Work Package or one reduced-SDD responsibility at a time.
-* Do not silently expand approved scope.
-* Significant architectural decisions must not emerge silently through implementation.
-* Relevant automated tests are part of implementation completeness.
-* `Validation` is the owner manual validation stage before `Done`.
+- Discovery is analysis, not implementation.
+- Non-trivial work must have sufficient specification before implementation.
+- Explicit owner approval is required before approved work is materialized or planned implementation begins.
+- Implement one approved Work Package or one reduced-SDD responsibility at a time.
+- Do not silently expand approved scope.
+- Significant architectural decisions must not emerge silently through implementation.
+- Relevant automated tests are part of implementation completeness.
+- `Validation` is the owner manual validation stage before `Done`.
 
 Use only as much process as necessary to preserve scope, decisions, validation, and continuity.
 
@@ -51,12 +51,12 @@ Use only as much process as necessary to preserve scope, decisions, validation, 
 
 Preserve existing working-tree changes, including changes not created by the agent.
 
-* Never discard, overwrite, revert, or reformat unrelated work.
-* Inspect a file before replacing or deleting it.
-* Do not modify generated files, vendored dependencies, build output, or local configuration unless explicitly required.
-* Prefer changing the responsible source or generator instead of generated output.
-* Do not expose, store, or print secrets, credentials, signing keys, tokens, or private environment values.
-* Do not weaken checks, tests, warnings, or security controls to make a task pass.
+- Never discard, overwrite, revert, or reformat unrelated work.
+- Inspect a file before replacing or deleting it.
+- Do not modify generated files, vendored dependencies, build output, or local configuration unless explicitly required.
+- Prefer changing the responsible source or generator instead of generated output.
+- Do not expose, store, or print secrets, credentials, signing keys, tokens, or private environment values.
+- Do not weaken checks, tests, warnings, or security controls to make a task pass.
 
 ## Architecture and dependencies
 
@@ -82,13 +82,13 @@ BMProv will perform operations capable of modifying or destroying data and opera
 
 Safety takes precedence over implementation convenience.
 
-* Never weaken identity, inventory, authorization, or destructive-operation safeguards to make a workflow pass.
-* Destructive operations must have explicit preconditions and safety invariants.
-* A MAC address is an inventory signal, not authentication and not a permanent endpoint identity.
-* Do not use unrestricted remote shell execution as a substitute for typed Agent actions.
-* Do not execute real destructive filesystem, partitioning, formatting, deployment, or data operations without explicit and specific owner authorization for that environment and target.
-* Automated tests must use appropriate fakes, fixtures, temporary storage, simulators, or disposable devices.
-* Real hardware and destructive operations belong to the integration layer when they cannot be represented safely in local development.
+- Never weaken identity, inventory, authorization, or destructive-operation safeguards to make a workflow pass.
+- Destructive operations must have explicit preconditions and safety invariants.
+- A MAC address is an inventory signal, not authentication and not a permanent endpoint identity.
+- Do not use unrestricted remote shell execution as a substitute for typed Agent actions.
+- Do not execute real destructive filesystem, partitioning, formatting, deployment, or data operations without explicit and specific owner authorization for that environment and target.
+- Automated tests must use appropriate fakes, fixtures, temporary storage, simulators, or disposable devices.
+- Real hardware and destructive operations belong to the integration layer when they cannot be represented safely in local development.
 
 ## Development environment
 
@@ -96,12 +96,12 @@ The physical BMProv server and laboratory are an Integration Environment, not a 
 
 Most development must be possible locally without:
 
-* a physical BMProv server;
-* real PXE infrastructure;
-* MikroTik hardware;
-* real client endpoints;
-* destructive disks;
-* production storage.
+- a physical BMProv server;
+- real PXE infrastructure;
+- MikroTik hardware;
+- real client endpoints;
+- destructive disks;
+- production storage.
 
 Use simulators, fake adapters, temporary storage, and deterministic fixtures at appropriate boundaries.
 
@@ -119,14 +119,14 @@ Inspection commands such as `git status`, `git diff`, `git log`, and `git show` 
 
 Unless explicitly and specifically authorized for the current task, do not perform Git or GitHub operations that modify:
 
-* the working tree or index;
-* branches or tags;
-* commit history;
-* remotes or synchronization state;
-* pull requests;
-* releases;
-* publication state;
-* GitHub Project state.
+- the working tree or index;
+- branches or tags;
+- commit history;
+- remotes or synchronization state;
+- pull requests;
+- releases;
+- publication state;
+- GitHub Project state.
 
 This includes staging, commits, amendments, checkout or restore operations, branch creation, merges, rebases, resets, stashes, pulls, pushes, tags, and release publication.
 
@@ -140,12 +140,12 @@ Use the narrowest validation that meaningfully demonstrates the changed behavior
 
 Follow `docs/development/testing.md`.
 
-* Do not claim a test, build, lint, check, or validation passed unless it was actually executed.
-* Do not hide failures or weaken checks.
-* Do not increase timeouts, disable cases, or add retries merely to mask failures without understanding the cause.
-* When evidence allows, distinguish failures caused by the current change from environment limitations or pre-existing repository failures.
-* Clearly report which automated validations were executed and which manual checks remain.
-* Never claim owner manual validation was completed on the owner's behalf.
+- Do not claim a test, build, lint, check, or validation passed unless it was actually executed.
+- Do not hide failures or weaken checks.
+- Do not increase timeouts, disable cases, or add retries merely to mask failures without understanding the cause.
+- When evidence allows, distinguish failures caused by the current change from environment limitations or pre-existing repository failures.
+- Clearly report which automated validations were executed and which manual checks remain.
+- Never claim owner manual validation was completed on the owner's behalf.
 
 ## Documentation
 
@@ -153,13 +153,13 @@ Use documentation according to its responsibility.
 
 Primary locations:
 
-* `README.md`: public product overview;
-* `docs/discovery/`: discovery and investigation;
-* `docs/specifications/`: persistent specifications when appropriate;
-* `docs/architecture/`: currently implemented architecture;
-* `docs/decisions/`: architectural decisions and ADR history;
-* `docs/development/`: engineering process;
-* `docs/reference/`: factual knowledge, compatibility notes, and technical reference material.
+- `README.md`: public product overview;
+- `docs/discovery/`: discovery and investigation;
+- `docs/specifications/`: persistent specifications when appropriate;
+- `docs/architecture/`: currently implemented architecture;
+- `docs/decisions/`: architectural decisions and ADR history;
+- `docs/development/`: engineering process;
+- `docs/reference/`: factual knowledge, compatibility notes, and technical reference material.
 
 Detailed documentation ownership belongs in `docs/development/documentation-policy.md` when that document exists.
 
@@ -169,25 +169,25 @@ Each piece of information should have one primary source. Avoid maintaining the 
 
 Use English for repository content, including:
 
-* source code;
-* identifiers;
-* source filenames where appropriate;
-* comments;
-* docstrings;
-* schemas;
-* APIs;
-* protocol fields;
-* internal logs;
-* domain events;
-* architecture documentation;
-* ADRs;
-* Discovery;
-* specifications;
-* SDD;
-* workflow documentation;
-* testing documentation;
-* reference documentation;
-* GitHub Issues and Work Packages.
+- source code;
+- identifiers;
+- source filenames where appropriate;
+- comments;
+- docstrings;
+- schemas;
+- APIs;
+- protocol fields;
+- internal logs;
+- domain events;
+- architecture documentation;
+- ADRs;
+- Discovery;
+- specifications;
+- SDD;
+- workflow documentation;
+- testing documentation;
+- reference documentation;
+- GitHub Issues and Work Packages.
 
 User-facing UI text must use localization boundaries rather than scattered hardcoded strings.
 
@@ -201,12 +201,12 @@ Academic and TCC-facing material may be written separately in Brazilian Portugue
 
 After changing files, report at minimum:
 
-* a summary of the changes;
-* files changed;
-* validation actually performed and its results;
-* limitations and remaining manual checks;
-* relevant out-of-scope findings without implementing them;
-* one suggested Conventional Commit message when appropriate.
+- a summary of the changes;
+- files changed;
+- validation actually performed and its results;
+- limitations and remaining manual checks;
+- relevant out-of-scope findings without implementing them;
+- one suggested Conventional Commit message when appropriate.
 
 When no files were changed, state that clearly.
 

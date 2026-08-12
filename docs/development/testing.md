@@ -2,23 +2,23 @@
 
 ## Principles
 
-- Teste comportamento BMProv observável, não internals de dependências.
-- Testes automatizados relevantes fazem parte da implementação desde o primeiro Work Package.
-- Use dados determinísticos e isolados.
+- Test observable BMProv behavior, not dependency internals.
+- Relevant automated tests are part of implementation from the first Work Package.
+- Use deterministic, isolated test data.
 - Run the narrowest relevant validation first.
-- Bugs reproduzíveis recebem regression test quando a camada adequada consegue representá-los.
-- Coverage é sinal diagnóstico, não prova de correção.
-- Manual Validation do owner continua necessária onde automação não representa o risco real.
+- Reproducible bugs should receive a regression test when an active test layer can represent them reliably.
+- Coverage is a diagnostic signal, not proof of correctness.
+- Owner manual Validation remains necessary where automation cannot represent the real risk.
 
-## Initial layers
+## Initial test layers
 
-### Domain/application tests
+### Domain and application tests
 
-Devem cobrir desde o primeiro vertical slice:
+From the first vertical slice, cover:
 
 - Job/JobStep state transitions;
 - resource leases;
-- retries e cancellation;
+- retries and cancellation;
 - idempotency;
 - stale inventory;
 - endpoint identity decisions;
@@ -26,21 +26,25 @@ Devem cobrir desde o primeiro vertical slice:
 
 ### Protocol contract tests
 
-- schema/version compatibility;
+Cover:
+
+- schema and protocol-version compatibility;
 - malformed messages;
 - duplicate messages;
-- correlation/acknowledgement;
-- reconnect;
+- correlation and acknowledgement;
+- reconnect behavior;
 - replay rejection;
-- timeout/cancellation.
+- timeout and cancellation.
 
 ### Adapter contract tests
 
-Fakes e adapters reais devem compartilhar contracts verificáveis sempre que útil, por exemplo storage, boot e discovery providers.
+Fakes and real adapters should share verifiable contracts when useful, including storage, boot, and discovery providers.
 
 ### Data-plane tests
 
-- slow producer/consumer;
+Cover relevant cases such as:
+
+- slow producer or consumer;
 - interruption;
 - cancellation;
 - corruption;
@@ -48,21 +52,21 @@ Fakes e adapters reais devem compartilhar contracts verificáveis sempre que út
 - disk full;
 - incomplete `.part` state;
 - atomic completion;
-- resume/checkpoint quando suportado.
+- resume or checkpoint behavior when supported.
 
 ### Simulator tests
 
-CI/local development deve representar 20–24+ endpoints com latência, throughput, disconnect/reconnect, failure, retries e storage pressure sem hardware físico.
+Local development and CI must be able to represent 20–24+ endpoints with configurable latency, throughput, disconnect/reconnect, failures, retries, and storage pressure without physical hardware.
 
 ### Web tests
 
-A direção aceita é Vitest para Svelte/TypeScript, com APIs/event boundaries simulados quando apropriado.
+The accepted direction is Vitest for Svelte/TypeScript behavior, with API and event boundaries simulated where appropriate.
 
 ## Safety
 
-Testes normais não devem executar operações destrutivas em discos reais.
+Normal automated tests must not perform destructive operations on real disks.
 
-Cenários de segurança mínimos incluem:
+Minimum safety scenarios include:
 
 - wrong disk;
 - changed disk identity;
@@ -70,24 +74,25 @@ Cenários de segurança mínimos incluem:
 - duplicate destructive action;
 - cancelled action;
 - action after reconnect;
-- missing/invalid authorization;
+- missing or invalid authorization;
 - interrupted destructive JobStep.
 
 ## Physical Integration Environment
 
-Validação em laboratório permanece explícita para:
+Explicit laboratory validation remains necessary for:
 
 - DHCP/PXE;
 - GRUB/UEFI;
-- Alpine diskless;
+- Alpine diskless boot;
 - real disks;
 - Windows/WinPE;
-- switch/NIC compatibility;
+- switch and NIC compatibility;
 - destructive provisioning.
 
-O laboratório não substitui testes locais e CI; ele cobre behavior impossível ou inseguro de simular completamente.
+The laboratory does not replace local tests and CI. It covers behavior that is impossible or unsafe to represent completely through simulation.
 
 ## Reporting
 
-Nunca declare que uma validação passou sem executá-la.
-Reporte comandos/checagens executados, resultados reais, limitações do ambiente e manual validation restante.
+Never claim validation passed unless it was actually executed.
+
+Report the commands or checks that ran, their actual results, environment limitations, and remaining manual validation.
