@@ -115,7 +115,10 @@ Once an important conclusion receives a more authoritative permanent home, link 
 
 ## Specifications
 
-Specifications define intended approved behavior.
+Specifications define intended behavior.
+
+Before owner approval, they are proposals. After approval, they become the
+approved specification for their scope.
 
 Use `docs/specifications/` when a Specification has long-term system value beyond one operational GitHub Issue.
 

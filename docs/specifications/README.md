@@ -1,7 +1,10 @@
 # Specifications
 
-Specifications describe approved future work before implementation.
+Specifications describe intended future behavior before execution.
 
-Use only sections that add useful information, such as Context, Goal, Scope, Out of scope, RF/RNF/RN, Acceptance Criteria, architecture impact, related ADRs, and Work Package decomposition.
+Before owner approval, a Specification is a proposal. After approval, it becomes
+the approved specification for that scope.
 
-Before owner approval, a Specification is a proposal.
+Use only sections that add useful information, such as Context, Goal, Scope,
+Out of scope, RF/RNF/RN, Acceptance Criteria, architecture impact, related ADRs,
+and Work Package decomposition.

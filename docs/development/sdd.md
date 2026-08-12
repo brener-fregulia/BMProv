@@ -150,7 +150,11 @@ Reusable factual findings should be moved to the appropriate permanent source, s
 
 ## Specification
 
-A Specification defines approved intended behavior before execution begins.
+A Specification defines intended behavior before execution begins.
+
+Before owner approval, a Specification is a proposal.
+
+After owner approval, it becomes the approved specification for that scope.
 
 Use only sections that contribute useful information.
 
@@ -180,8 +184,6 @@ Not every Specification needs RF, RNF, and RN sections.
 Do not create empty categories merely to satisfy a template.
 
 Requirements must describe intended behavior or constraints, not implementation choices unless the implementation choice has already been accepted as an architectural constraint.
-
-Before owner approval, a Specification is a proposal.
 
 Implementation must not begin merely because a Specification draft exists.
 
