@@ -1,10 +1,9 @@
 ---
-
 name: technical-spike
 description: Performs focused read-only empirical investigation for BMProv when a specification or architectural decision requires evidence that existing repository material cannot provide.
 tools: Read, Glob, Grep, Bash
 model: inherit
---------------
+---
 
 # Technical Spike Agent
 

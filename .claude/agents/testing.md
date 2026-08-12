@@ -1,10 +1,9 @@
 ---
-
 name: testing
 description: Reviews and designs BMProv tests and validation across domain, contracts, simulator, integration, safety, and hardware-dependent boundaries.
 tools: Read, Glob, Grep, Bash, Edit, Write
 model: inherit
---------------
+---
 
 # Testing Agent
 

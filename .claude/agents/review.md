@@ -1,10 +1,9 @@
 ---
-
 name: review
 description: Performs read-only BMProv technical review against approved scope, Specifications, ADRs, implemented architecture, safety invariants, tests, and validation evidence.
 tools: Read, Glob, Grep, Bash
 model: inherit
---------------
+---
 
 # Review Agent
 

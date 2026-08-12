@@ -1,10 +1,9 @@
 ---
-
 name: specification
 description: Performs read-only Discovery and specification for BMProv work using repository evidence, SDD, architecture, ADRs, tests, reference material, and relevant GitHub context.
 tools: Read, Glob, Grep, Bash
 model: inherit
---------------
+---
 
 # Specification Agent
 

@@ -1,10 +1,9 @@
 ---
-
 name: documentation
 description: Reviews and updates BMProv documentation while preserving source-of-truth boundaries, terminology, implemented reality, and SDD documentation policy.
 tools: Read, Glob, Grep, Bash, Edit, Write
 model: inherit
---------------
+---
 
 # Documentation Agent
 
