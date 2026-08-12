@@ -2,101 +2,223 @@
 
 ## Purpose
 
-Este arquivo define regras obrigatórias para agentes de IA trabalhando no BMProv.
-Procedimentos detalhados pertencem a `docs/development/`; decisões técnicas duráveis pertencem a `docs/decisions/`.
+This file defines the mandatory rules for any AI agent working in the BMProv repository.
+
+Tool-specific instructions belong in files such as `CLAUDE.md` and `.claude/`.
+Detailed procedures belong in `docs/development/`.
+
+`README.md` is public product documentation and must not be used as a source of agent instructions.
 
 ## Sources of truth
 
-O repositório é a fonte permanente de contexto técnico.
-Após materialização do trabalho aprovado, GitHub Issues, Projects e Milestones são a fonte operacional de escopo e estado.
+The repository is the permanent source of BMProv technical context.
 
-Antes de propor ou alterar algo:
+Implementation and tests are the source of truth for currently implemented behavior.
 
-- leia somente a documentação relevante à tarefa;
-- confira implementação e testes existentes quando houver;
-- confira ADRs relacionados;
-- reporte conflito entre pedido, especificação, ADR e estado real;
-- não invente comportamento, requisitos, APIs, caminhos, comandos ou resultados de validação.
+After approved work is materialized:
 
-Uma sessão de IA nunca pode ser a única fonte de informação necessária para continuar o trabalho.
+* GitHub Issues store approved specifications and Work Packages;
+* GitHub Projects store operational workflow state and progress;
+* GitHub Milestones group milestones or releases when applicable.
 
-## SDD and scope
+An AI session must never be the only place containing information required to understand, continue, validate, or maintain relevant work.
 
-Siga `docs/development/sdd.md`.
+Before proposing or making changes:
 
-- Discovery é análise, não implementação.
-- Antes da implementação deve existir especificação suficiente e aprovação do owner.
-- Implemente uma responsabilidade ou Work Package aprovado por vez.
-- Não expanda silenciosamente o escopo.
-- Decisões arquiteturais relevantes não podem surgir silenciosamente em código.
-- Testes automatizados relevantes fazem parte da implementação.
-- `Validation` é a etapa de validação manual do owner antes de `Done`.
+* inspect the relevant implementation and nearby tests when they exist;
+* read only the documentation needed for the task;
+* inspect relevant architecture documents and ADRs;
+* verify paths, commands, configuration, and conventions in the repository;
+* report conflicts between the request, specification, ADRs, documentation, and actual repository state;
+* do not invent files, APIs, behavior, requirements, commands, conventions, or validation results.
 
-## Architecture
+## Scope and SDD
 
-`docs/architecture/` descreve somente arquitetura que realmente existe.
-Não documente arquitetura planejada como se estivesse implementada.
+Follow `docs/development/sdd.md`.
 
-Antes de introduzir uma abstração, módulo, serviço, adapter, dependency ou boundary:
+* Discovery is analysis, not implementation.
+* Non-trivial work must have sufficient specification before implementation.
+* Explicit owner approval is required before approved work is materialized or planned implementation begins.
+* Implement one approved Work Package or one reduced-SDD responsibility at a time.
+* Do not silently expand approved scope.
+* Significant architectural decisions must not emerge silently through implementation.
+* Relevant automated tests are part of implementation completeness.
+* `Validation` is the owner manual validation stage before `Done`.
 
-1. identifique o requisito atual que a justifica;
-2. identifique a responsabilidade arquitetural correta;
-3. confira ADRs existentes;
-4. preserve boundaries aceitos ou proponha explicitamente sua mudança.
+Use only as much process as necessary to preserve scope, decisions, validation, and continuity.
 
-BMProv não deve herdar stack, diretórios ou runtime boundaries do FORGE ou Pascoal sem justificativa própria.
+## Repository protection
+
+Preserve existing working-tree changes, including changes not created by the agent.
+
+* Never discard, overwrite, revert, or reformat unrelated work.
+* Inspect a file before replacing or deleting it.
+* Do not modify generated files, vendored dependencies, build output, or local configuration unless explicitly required.
+* Prefer changing the responsible source or generator instead of generated output.
+* Do not expose, store, or print secrets, credentials, signing keys, tokens, or private environment values.
+* Do not weaken checks, tests, warnings, or security controls to make a task pass.
+
+## Architecture and dependencies
+
+`docs/architecture/` documents only architecture that actually exists.
+
+Do not describe planned architecture as if it were already implemented.
+
+Before introducing or changing a module, abstraction, service, adapter, worker, boundary, protocol, or dependency:
+
+1. identify the current requirement that justifies the change;
+2. identify the correct architectural responsibility;
+3. inspect existing patterns and nearby solutions;
+4. inspect relevant ADRs;
+5. preserve accepted decisions or explicitly propose changing them.
+
+BMProv must not inherit stacks, directories, protocols, runtime boundaries, or architectural patterns from FORGE, Pascoal, or any other project without justification based on BMProv's own requirements.
+
+Do not introduce dependencies merely for convenience. Evaluate their impact on maintenance, deployment, security, runtime footprint, and operational support.
 
 ## Safety
 
-BMProv executará operações destrutivas em discos.
+BMProv will perform operations capable of modifying or destroying data and operating system installations.
 
-- Nunca enfraqueça validações de identidade, inventário, autorização ou segurança para fazer um fluxo passar.
-- Operações destrutivas devem possuir preconditions e safety invariants explícitos.
-- MAC address é sinal de inventário, não autenticação nem identidade permanente.
-- Não introduza execução remota arbitrária como substituto de Agent actions tipadas.
-- Não exponha, armazene ou imprima secrets, tokens, credenciais ou chaves privadas.
-- Testes não devem tocar discos ou dados reais do usuário salvo integração destrutiva explicitamente autorizada em ambiente adequado.
+Safety takes precedence over implementation convenience.
+
+* Never weaken identity, inventory, authorization, or destructive-operation safeguards to make a workflow pass.
+* Destructive operations must have explicit preconditions and safety invariants.
+* A MAC address is an inventory signal, not authentication and not a permanent endpoint identity.
+* Do not use unrestricted remote shell execution as a substitute for typed Agent actions.
+* Do not execute real destructive filesystem, partitioning, formatting, deployment, or data operations without explicit and specific owner authorization for that environment and target.
+* Automated tests must use appropriate fakes, fixtures, temporary storage, simulators, or disposable devices.
+* Real hardware and destructive operations belong to the integration layer when they cannot be represented safely in local development.
 
 ## Development environment
 
-O servidor físico e o laboratório são Integration Environment, não requisitos de desenvolvimento.
+The physical BMProv server and laboratory are an Integration Environment, not a required development environment.
 
-A maior parte do projeto deve ser executável e testável localmente, preferencialmente em Linux e, para partes portáveis, também em Windows 11.
-Use fakes, simuladores, temporary storage e fixtures determinísticos nas boundaries apropriadas.
+Most development must be possible locally without:
+
+* a physical BMProv server;
+* real PXE infrastructure;
+* MikroTik hardware;
+* real client endpoints;
+* destructive disks;
+* production storage.
+
+Use simulators, fake adapters, temporary storage, and deterministic fixtures at appropriate boundaries.
+
+Linux is the primary development environment and the production target for BMProv Server.
+
+Portable parts should remain reasonably developable and testable on Windows 11 when doing so does not compromise Linux-specific responsibilities.
+
+Do not create artificial abstractions merely to pretend inherently Linux-specific responsibilities are platform-independent.
 
 ## Git and publication
 
-O owner mantém controle sobre Git e publicação, salvo autorização explícita e específica para a tarefa atual.
-Não faça commit, push, merge, tag, release ou alteração de Project implicitamente.
+The repository owner retains control of Git and publication.
 
-Ao concluir alterações locais, sugira Conventional Commit quando útil.
+Inspection commands such as `git status`, `git diff`, `git log`, and `git show` are allowed when relevant.
+
+Unless explicitly and specifically authorized for the current task, do not perform Git or GitHub operations that modify:
+
+* the working tree or index;
+* branches or tags;
+* commit history;
+* remotes or synchronization state;
+* pull requests;
+* releases;
+* publication state;
+* GitHub Project state.
+
+This includes staging, commits, amendments, checkout or restore operations, branch creation, merges, rebases, resets, stashes, pulls, pushes, tags, and release publication.
+
+A request to implement, test, review, or document something does not implicitly authorize publication or Git state changes.
+
+After local changes, suggest a Conventional Commit message when useful, but do not execute it without explicit authorization.
 
 ## Validation
 
-Use a validação mais estreita capaz de demonstrar o comportamento alterado e amplie quando o risco justificar.
+Use the narrowest validation that meaningfully demonstrates the changed behavior, and broaden validation when risk or scope justifies it.
 
-- Não declare teste, build ou validação como concluído se não foi executado.
-- Não esconda falhas nem enfraqueça checks.
-- Diferencie falha causada pela mudança, limitação do ambiente e falha preexistente quando houver evidência.
-- Informe claramente a validação manual restante.
+Follow `docs/development/testing.md`.
 
-## Documentation ownership
+* Do not claim a test, build, lint, check, or validation passed unless it was actually executed.
+* Do not hide failures or weaken checks.
+* Do not increase timeouts, disable cases, or add retries merely to mask failures without understanding the cause.
+* When evidence allows, distinguish failures caused by the current change from environment limitations or pre-existing repository failures.
+* Clearly report which automated validations were executed and which manual checks remain.
+* Never claim owner manual validation was completed on the owner's behalf.
 
-- `README.md`: visão pública do projeto;
-- `docs/discovery/`: análise, alternativas e questões ainda não aceitas;
-- `docs/specifications/`: trabalho futuro aprovado;
-- `docs/architecture/`: arquitetura atual implementada;
-- `docs/decisions/`: ADRs e raciocínio histórico;
-- `docs/development/`: processo de engenharia;
-- `docs/reference/`: conhecimento factual de integração e compatibilidade;
-- GitHub Issues: trabalho aprovado materializado;
-- GitHub Projects: estado operacional;
-- GitHub Milestones: agrupamento de marco/release quando aplicável.
+## Documentation
 
-Cada informação deve ter uma fonte primária. Evite duplicação.
+Use documentation according to its responsibility.
+
+Primary locations:
+
+* `README.md`: public product overview;
+* `docs/discovery/`: discovery and investigation;
+* `docs/specifications/`: persistent specifications when appropriate;
+* `docs/architecture/`: currently implemented architecture;
+* `docs/decisions/`: architectural decisions and ADR history;
+* `docs/development/`: engineering process;
+* `docs/reference/`: factual knowledge, compatibility notes, and technical reference material.
+
+Detailed documentation ownership belongs in `docs/development/documentation-policy.md` when that document exists.
+
+Each piece of information should have one primary source. Avoid maintaining the same information in multiple places.
 
 ## Language
 
-- source code, schemas, APIs, protocol fields, internal events and logs: English;
-- documentação de arquitetura, ADRs, SDD, especificações e referência: pt-BR inicialmente;
-- UI: strings user-facing devem respeitar boundary de localização, começando por `pt-BR` e preparando `en-US`.
+Use English for repository content, including:
+
+* source code;
+* identifiers;
+* source filenames where appropriate;
+* comments;
+* docstrings;
+* schemas;
+* APIs;
+* protocol fields;
+* internal logs;
+* domain events;
+* architecture documentation;
+* ADRs;
+* Discovery;
+* specifications;
+* SDD;
+* workflow documentation;
+* testing documentation;
+* reference documentation;
+* GitHub Issues and Work Packages.
+
+User-facing UI text must use localization boundaries rather than scattered hardcoded strings.
+
+The initial UI locale is `pt-BR`.
+
+The planned additional locale is `en-US`.
+
+Academic and TCC-facing material may be written separately in Brazilian Portuguese and must not become a second authoritative copy of the engineering documentation.
+
+## Final response
+
+After changing files, report at minimum:
+
+* a summary of the changes;
+* files changed;
+* validation actually performed and its results;
+* limitations and remaining manual checks;
+* relevant out-of-scope findings without implementing them;
+* one suggested Conventional Commit message when appropriate.
+
+When no files were changed, state that clearly.
+
+## Instruction precedence
+
+When instructions conflict, use this order:
+
+1. safety, data protection, and prevention of destructive operations;
+2. explicit owner instructions for the current task;
+3. this `AGENTS.md`;
+4. tool-specific instructions;
+5. relevant project documentation;
+6. established implementation patterns.
+
+An operation that is normally restricted requires explicit, specific, and task-limited authorization. It must not be inferred implicitly.
