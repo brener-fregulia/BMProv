@@ -1,49 +1,40 @@
 # BMProv
 
-> **BMProv is an open-source bare-metal provisioning platform.**
+> Open-source bare-metal provisioning platform.
 
-BMProv (Bare-Metal Provisioning) é uma plataforma open source para provisionamento e recuperação bare-metal em redes locais controladas.
+BMProv is a platform for provisioning, recovery, and orchestration of physical endpoints over local networks.
 
-O projeto está em fase inicial de **Specification-Driven Development (SDD)**. O repositório começa pela definição de requisitos, contratos, limites arquiteturais, decisões e estratégia de testes. Não há implementação de produção neste bootstrap.
+The project is designed around automated bare-metal workflows such as network boot, hardware and storage inventory, backup and recovery, operating system deployment, and post-install automation.
 
-## Direção inicial
+BMProv is being developed as a clean implementation informed by lessons learned from an earlier proof of concept.
 
-- V1 focada em provisionamento de Windows 11 em UEFI x86-64;
-- administração browser-first;
-- Server Linux, inicialmente direcionado a Debian;
-- desenvolvimento local sem dependência do laboratório físico;
-- Simulator como requisito de primeira classe;
-- modular monolith no Server, com isolamento de cargas pesadas quando necessário;
-- Server, Web e Agent versionados independentemente;
-- API e protocolos versionados separadamente das versões dos artefatos;
-- armazenamento modelado por papéis lógicos `SYSTEM`, `CACHE` e `ARCHIVE`;
-- segurança e validação explícitas para operações destrutivas.
+## Project status
 
-## Componentes esperados
+BMProv is currently in its architecture and specification phase.
 
-- **BMProv Server** — control plane, domínio, orchestration, scheduling e adapters;
-- **BMProv Web** — interface administrativa browser-first;
-- **BMProv Agent** — runtime efêmero no ambiente de manutenção;
-- **BMProv Simulator** — simulação determinística de endpoints e infraestrutura;
-- **BMProv Extensions** — futuras extensões desacopladas por contratos públicos.
+Production provisioning is not implemented yet.
 
-Os nomes técnicos esperados incluem `bmprov-server`, `bmprov-web`, `bmprov-agent` e `bmprov-simulator`.
+The initial production target is:
 
-## Status
+* Windows provisioning;
+* UEFI x86-64 endpoints;
+* Linux-based BMProv Server;
+* browser-based administration;
+* standalone, single-server deployments.
 
-O primeiro marco é **M0 — Architecture Baseline & Simulated Provisioning Contract**.
+## Components
 
-M0 não contém provisionamento de produção. Seu objetivo é transformar Discovery em uma baseline arquitetural e de especificação aprovada antes do primeiro vertical slice de implementação.
+BMProv is expected to consist of independently evolvable components such as:
 
-Consulte:
+* **BMProv Server**
+* **BMProv Web**
+* **BMProv Agent**
+* **BMProv Simulator**
 
-- [`docs/discovery/`](docs/discovery/) para análise e questões ainda em decisão;
-- [`docs/specifications/`](docs/specifications/) para trabalho futuro aprovado;
-- [`docs/architecture/`](docs/architecture/) somente para arquitetura efetivamente implementada;
-- [`docs/decisions/`](docs/decisions/) para ADRs;
-- [`docs/development/`](docs/development/) para SDD, workflow e testes;
-- [`docs/reference/`](docs/reference/) para conhecimento validado do PoC e compatibilidade de hardware.
+The exact implementation architecture is still being defined through Specification-Driven Development and Architecture Decision Records.
 
-## Licença
+## License
 
-BMProv é distribuído sob a [Apache License 2.0](LICENSE). Consulte também [`NOTICE`](NOTICE).
+BMProv is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 Brener Fregulia.
