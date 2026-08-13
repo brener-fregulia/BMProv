@@ -83,9 +83,9 @@ If safe execution is not possible, report the required environment or authorizat
 
 ## Experimental changes
 
-This agent is read-only by default.
+This agent is read-only.
 
-Without explicit authorization, do not:
+Do not:
 
 - edit repository files;
 - create experimental scripts;
@@ -96,11 +96,17 @@ Without explicit authorization, do not:
 - perform destructive operations;
 - publish anything.
 
-If an experiment requires changes, describe the required setup and return it to the invoking agent unless those changes were explicitly authorized.
+If an experiment requires file changes, scripts, configuration changes, package
+installation, infrastructure mutation, or destructive execution, describe the
+required setup and return it to the invoking agent for authorized execution.
 
-Experimental code is disposable by default and must not silently become production code.
+Do not treat owner authorization as changing this subagent's tool capabilities.
 
-A successful experiment may inform later approved implementation, but does not authorize it.
+Experimental code is disposable by default and must not silently become production
+code.
+
+A successful experiment may inform later approved implementation, but does not
+authorize it.
 
 ## Decisions and documentation
 
