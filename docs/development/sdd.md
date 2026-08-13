@@ -2,7 +2,7 @@
 
 ## Purpose
 
-BMProv uses Specification-Driven Development (SDD) so important work can be understood, approved, implemented, validated, and resumed without depending on conversation history or a specific AI session.
+Bamep uses Specification-Driven Development (SDD) so important work can be understood, approved, implemented, validated, and resumed without depending on conversation history or a specific AI session.
 
 The repository stores permanent technical context.
 
@@ -50,7 +50,7 @@ An AI session or chat must never be the only place containing information requir
 
 ## Lifecycle
 
-The normal BMProv lifecycle is:
+The normal Bamep lifecycle is:
 
 ```text
 Idea
@@ -389,7 +389,7 @@ When a decision changes, preserve decision history rather than rewriting accepte
 
 ## Safety-sensitive work
 
-BMProv includes operations capable of modifying or destroying endpoint data and operating system installations.
+Bamep includes operations capable of modifying or destroying endpoint data and operating system installations.
 
 Specifications involving any of the following require explicit safety treatment:
 
@@ -554,4 +554,4 @@ Do not add hierarchy, documentation, or ceremony that provides no useful project
 
 The purpose of SDD is not to produce documents.
 
-The purpose of SDD is to ensure that important BMProv behavior and decisions are explicit before they become difficult to change.
+The purpose of SDD is to ensure that important Bamep behavior and decisions are explicit before they become difficult to change.

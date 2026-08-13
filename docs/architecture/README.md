@@ -1,8 +1,8 @@
-# BMProv Architecture
+# Bamep Architecture
 
 ## Purpose
 
-This directory documents only BMProv technical architecture that is **implemented and validated**.
+This directory documents only Bamep technical architecture that is **implemented and validated**.
 
 At the initial bootstrap stage, there is no implemented application architecture yet. Proposed architecture remains in `docs/discovery/`, Specifications, and ADRs until corresponding validated code exists.
 
@@ -17,6 +17,6 @@ Once implementation exists, code and tests are the ultimate source of truth for 
 
 ## Relationship with ADRs
 
-Architecture documentation answers: **How does BMProv work now?**
+Architecture documentation answers: **How does Bamep work now?**
 
 An ADR answers: **Why was a significant architectural decision chosen, and what constraints did it establish?**

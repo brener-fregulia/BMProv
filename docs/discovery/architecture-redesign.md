@@ -1,25 +1,25 @@
-# BMProv — Architecture Discovery Baseline
+# Bamep — Architecture Discovery Baseline
 
 Status: **Discovery baseline updated with owner decisions**
 
 ## Context
 
-BMProv is a clean implementation with no inherited Git history or source code from FORGE. The previous PoC is technical evidence: validated behavior, limitations, workarounds, and architectural mistakes. It is not a compatibility constraint.
+Bamep is a clean implementation with no inherited Git history or source code from FORGE. The previous PoC is technical evidence: validated behavior, limitations, workarounds, and architectural mistakes. It is not a compatibility constraint.
 
 ## Product boundary
 
-BMProv is a standalone bare-metal provisioning and recovery platform for controlled local networks. It should discover and identify endpoints, coordinate boot and maintenance environments, collect inventory, execute provisioning and recovery workflows, transfer and manage artifacts, schedule concurrent resources, and provide secure, observable, auditable operation through an API and web interface.
+Bamep is a standalone bare-metal provisioning and recovery platform for controlled local networks. It should discover and identify endpoints, coordinate boot and maintenance environments, collect inventory, execute provisioning and recovery workflows, transfer and manage artifacts, schedule concurrent resources, and provide secure, observable, auditable operation through an API and web interface.
 
-BMProv V1:
+Bamep V1:
 
 - provisions Windows, with Windows 11 as the primary modern target;
 - supports UEFI x86-64 endpoints;
 - initially operates as a single-server deployment;
-- assumes a dedicated provisioning interface/VLAN/network where BMProv may control DHCP/PXE;
+- assumes a dedicated provisioning interface/VLAN/network where Bamep may control DHCP/PXE;
 - does not depend on Internet access once required artifacts are available locally;
 - does not require MikroTik hardware, dedicated hot cache, dedicated archive storage, RAID, PostgreSQL, or WebSocket.
 
-BMProv is not an ERP, CRM, financial system, general-purpose RMM, NAS, general switch manager, or V1 multi-site platform. A future ERP must integrate through a public/versioned API and domain events, never through BMProv's internal database.
+Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general switch manager, or V1 multi-site platform. A future ERP must integrate through a public/versioned API and domain events, never through Bamep's internal database.
 
 ## Proposed component boundaries
 
@@ -41,7 +41,7 @@ The initial direction is **modular monolith first**, with explicit internal boun
 
 Microservices, clustering, Redis, leader election, and a distributed scheduler are not V1 requirements.
 
-Workers initially belong to the BMProv Server release and do not receive independent versioning.
+Workers initially belong to the Bamep Server release and do not receive independent versioning.
 
 ## Development architecture
 
@@ -66,7 +66,7 @@ Accepted direction unless a concrete blocker is discovered later:
 - Vitest;
 - browser-first administration.
 
-BMProv Web is independently deployable and updateable from BMProv Server. A Web-only bugfix should not require restarting Server jobs.
+Bamep Web is independently deployable and updateable from Bamep Server. A Web-only bugfix should not require restarting Server jobs.
 
 ## Backend and Agent
 
@@ -181,7 +181,7 @@ High-frequency telemetry does not need to be persisted indefinitely.
 
 ## Open-source and commercial boundary
 
-Standalone BMProv remains genuinely useful as open-source software, including Server, Agent, Web, orchestration, scheduler, backup/recovery, artifact handling, Simulator, API, basic adapters, and essential observability.
+Standalone Bamep remains genuinely useful as open-source software, including Server, Agent, Web, orchestration, scheduler, backup/recovery, artifact handling, Simulator, API, basic adapters, and essential observability.
 
 Future commercial differentiation may exist above or around the engine, including ERP integration, multi-site management, centralized management, advanced reporting, hosted services, support, and specialized integrations.
 

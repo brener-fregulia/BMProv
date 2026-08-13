@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines the mandatory rules for any AI agent working in the BMProv repository.
+This file defines the mandatory rules for any AI agent working in the Bamep repository.
 
 Tool-specific instructions belong in files such as `CLAUDE.md` and `.claude/`.
 Detailed procedures belong in `docs/development/`.
@@ -11,7 +11,7 @@ Detailed procedures belong in `docs/development/`.
 
 ## Sources of truth
 
-The repository is the permanent source of BMProv technical context.
+The repository is the permanent source of Bamep technical context.
 
 Implementation and tests are the source of truth for currently implemented behavior.
 
@@ -72,13 +72,13 @@ Before introducing or changing a module, abstraction, service, adapter, worker, 
 4. inspect relevant ADRs;
 5. preserve accepted decisions or explicitly propose changing them.
 
-BMProv must not inherit stacks, directories, protocols, runtime boundaries, or architectural patterns from FORGE, Pascoal, or any other project without justification based on BMProv's own requirements.
+Bamep must not inherit stacks, directories, protocols, runtime boundaries, or architectural patterns from FORGE, Pascoal, or any other project without justification based on Bamep's own requirements.
 
 Do not introduce dependencies merely for convenience. Evaluate their impact on maintenance, deployment, security, runtime footprint, and operational support.
 
 ## Safety
 
-BMProv will perform operations capable of modifying or destroying data and operating system installations.
+Bamep will perform operations capable of modifying or destroying data and operating system installations.
 
 Safety takes precedence over implementation convenience.
 
@@ -92,11 +92,11 @@ Safety takes precedence over implementation convenience.
 
 ## Development environment
 
-The physical BMProv server and laboratory are an Integration Environment, not a required development environment.
+The physical Bamep server and laboratory are an Integration Environment, not a required development environment.
 
 Most development must be possible locally without:
 
-- a physical BMProv server;
+- a physical Bamep server;
 - real PXE infrastructure;
 - MikroTik hardware;
 - real client endpoints;
@@ -105,7 +105,7 @@ Most development must be possible locally without:
 
 Use simulators, fake adapters, temporary storage, and deterministic fixtures at appropriate boundaries.
 
-Linux is the primary development environment and the production target for BMProv Server.
+Linux is the primary development environment and the production target for Bamep Server.
 
 Portable parts should remain reasonably developable and testable on Windows 11 when doing so does not compromise Linux-specific responsibilities.
 

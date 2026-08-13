@@ -49,7 +49,7 @@ durable architectural decision remains to be recorded.
 These are product, scope, repository-convention, or operational decisions already
 established by the owner:
 
-- BMProv name and expected component names;
+- Bamep name and expected component names;
 - Apache-2.0 licensing;
 - canonical repository and engineering documentation in English;
 - source/API/protocol identifiers in English;

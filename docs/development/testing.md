@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the BMProv testing and validation strategy.
+This document defines the Bamep testing and validation strategy.
 
 It describes:
 
@@ -27,7 +27,7 @@ Related responsibilities:
 
 ## Principles
 
-* Test observable BMProv behavior, not dependency internals.
+* Test observable Bamep behavior, not dependency internals.
 * Relevant automated tests are part of implementation completeness.
 * Run the narrowest meaningful validation first.
 * Expand validation according to scope and risk.
@@ -42,7 +42,7 @@ Related responsibilities:
 
 ## Test layers
 
-BMProv should use the smallest layer capable of validating the intended behavior.
+Bamep should use the smallest layer capable of validating the intended behavior.
 
 The expected strategy contains:
 
@@ -131,11 +131,11 @@ Examples include:
 
 Prefer local disposable dependencies when practical.
 
-Integration tests must remain deterministic enough to run repeatedly without requiring the physical BMProv laboratory.
+Integration tests must remain deterministic enough to run repeatedly without requiring the physical Bamep laboratory.
 
 ## Simulator
 
-BMProv Simulator is a first-class validation tool.
+Bamep Simulator is a first-class validation tool.
 
 It should eventually support many concurrent simulated endpoints with configurable characteristics such as:
 
@@ -266,7 +266,7 @@ Tests should demonstrate that restart or reconnect does not blindly replay destr
 
 ## Frontend tests
 
-Use frontend tests for behavior owned by BMProv Web.
+Use frontend tests for behavior owned by Bamep Web.
 
 Relevant areas include:
 
@@ -282,7 +282,7 @@ Relevant areas include:
 
 Prefer observable assertions over private component structure.
 
-Frontend tests must not depend on a live production BMProv Server unless explicitly running as an integration scenario.
+Frontend tests must not depend on a live production Bamep Server unless explicitly running as an integration scenario.
 
 ## Regression tests
 
@@ -310,7 +310,7 @@ Automated tests must not depend on:
 * developer-specific configuration;
 * real credentials;
 * public Internet availability;
-* physical BMProv hardware unless the test is explicitly an Integration Environment test.
+* physical Bamep hardware unless the test is explicitly an Integration Environment test.
 
 Use:
 
@@ -326,7 +326,7 @@ Created resources should be cleaned up after success and failure when practical.
 
 ## Integration Environment
 
-The physical BMProv laboratory exists for behavior that cannot be validated faithfully through local tests or simulation.
+The physical Bamep laboratory exists for behavior that cannot be validated faithfully through local tests or simulation.
 
 Examples include:
 
@@ -466,7 +466,7 @@ Do not describe intended tests as executed tests.
 
 ## Current bootstrap state
 
-BMProv does not yet have an established production test stack or authoritative repository-wide test commands.
+Bamep does not yet have an established production test stack or authoritative repository-wide test commands.
 
 Do not invent them.
 
@@ -476,7 +476,7 @@ Concrete commands should remain authoritative in the build, package, workspace, 
 
 ## Guiding rule
 
-BMProv testing should make unsafe, invalid, interrupted, and unexpected behavior as deliberate to validate as the successful path.
+Bamep testing should make unsafe, invalid, interrupted, and unexpected behavior as deliberate to validate as the successful path.
 
 Simulation should cover what can be represented deterministically.
 

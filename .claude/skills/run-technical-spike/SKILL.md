@@ -1,6 +1,6 @@
 ---
 name: run-technical-spike
-description: Execute one approved BMProv Technical Spike to gather focused empirical evidence without turning experimental work into production architecture implicitly.
+description: Execute one approved Bamep Technical Spike to gather focused empirical evidence without turning experimental work into production architecture implicitly.
 argument-hint: "[approved Technical Spike question or Issue]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Purpose
 
-Use this skill to execute one approved BMProv Technical Spike.
+Use this skill to execute one approved Bamep Technical Spike.
 
 A Technical Spike gathers evidence for a Specification or architectural decision.
 

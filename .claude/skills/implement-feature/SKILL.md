@@ -1,6 +1,6 @@
 ---
 name: implement-feature
-description: Implement one approved BMProv Work Package or reduced-SDD task with focused validation and strict scope control.
+description: Implement one approved Bamep Work Package or reduced-SDD task with focused validation and strict scope control.
 argument-hint: "[approved Work Package or reduced-SDD task]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Purpose
 
-Use this skill to execute one approved BMProv Work Package or one valid reduced-SDD task.
+Use this skill to execute one approved Bamep Work Package or one valid reduced-SDD task.
 
 This skill assumes the relevant planning and approval already exist.
 

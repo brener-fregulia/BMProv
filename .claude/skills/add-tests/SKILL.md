@@ -1,6 +1,6 @@
 ---
 name: add-tests
-description: Add or improve focused BMProv automated tests for approved behavior without expanding product scope or weakening validation rules.
+description: Add or improve focused Bamep automated tests for approved behavior without expanding product scope or weakening validation rules.
 argument-hint: "[behavior, Work Package, files, defect, or test gap]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Purpose
 
-Use this skill to add focused automated validation for existing or approved BMProv behavior.
+Use this skill to add focused automated validation for existing or approved Bamep behavior.
 
 This skill may add missing tests, strengthen weak coverage, add regressions, improve isolation, and make small behavior-preserving changes required for testability.
 

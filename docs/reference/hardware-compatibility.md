@@ -3,10 +3,10 @@
 This document records hardware and boot compatibility observations from the previous
 FORGE laboratory.
 
-These observations are **not BMProv hardware requirements**.
+These observations are **not Bamep hardware requirements**.
 
 Exact software, firmware, and bootloader versions were not preserved in the current
-BMProv reference material. Results that may depend on version or environment must
+Bamep reference material. Results that may depend on version or environment must
 therefore be revalidated before being treated as current compatibility guarantees.
 
 ## MikroTik CRS326-24G-2S+RM / tested family
@@ -20,7 +20,7 @@ The tested workaround used:
 - `protocol-mode=none` to avoid STP delay during PXE boot;
 - `fast-forward=no`.
 
-This is compatibility evidence from that environment, not a required BMProv network
+This is compatibility evidence from that environment, not a required Bamep network
 configuration.
 
 ## Intel X520-DA2
@@ -39,7 +39,7 @@ configuration.
 `active-backup` was preferred over LACP in the previous laboratory because
 redundancy was the goal and LACP negotiation introduced noticeable PXE boot delay.
 
-The experiment does not establish a general BMProv bonding requirement.
+The experiment does not establish a general Bamep bonding requirement.
 
 ## Bootloader experiments
 
@@ -52,9 +52,9 @@ The tested sequence was:
 4. `grubx64.efi` — provided stable Alpine boot behavior in the tested laboratory.
 
 The experiment validates GRUB as a working solution for that environment. It does
-not establish GRUB as the permanent BMProv boot implementation.
+not establish GRUB as the permanent Bamep boot implementation.
 
-Current BMProv boot architecture and future decisions belong in Discovery,
+Current Bamep boot architecture and future decisions belong in Discovery,
 Specifications, and ADRs rather than this reference document.
 
 ## Dynamic boot by endpoint
@@ -66,7 +66,7 @@ Its implementation used MAC-specific GRUB configuration.
 
 The reusable evidence is the per-endpoint boot-selection requirement observed by the
 PoC. The MAC-specific configuration mechanism is an implementation detail of the
-previous system and is not a BMProv constraint.
+previous system and is not a Bamep constraint.
 
-See `../discovery/architecture-redesign.md` for the current BMProv architectural
+See `../discovery/architecture-redesign.md` for the current Bamep architectural
 direction derived from this and other evidence.

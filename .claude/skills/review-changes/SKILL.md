@@ -1,6 +1,6 @@
 ---
 name: review-changes
-description: Perform a read-only BMProv review of executed work against approved scope, architecture, safety, and validation evidence.
+description: Perform a read-only Bamep review of executed work against approved scope, architecture, safety, and validation evidence.
 argument-hint: "[Work Package, branch, diff, files, or change set to review]"
 disable-model-invocation: true
 ---
@@ -87,7 +87,7 @@ Do not:
 - assume tests passed merely because test code exists;
 - accept simulation as physical compatibility evidence;
 - treat coverage percentage alone as proof of correctness;
-- compare BMProv against FORGE or Pascoal unless explicitly relevant to the approved work.
+- compare Bamep against FORGE or Pascoal unless explicitly relevant to the approved work.
 
 If authoritative sources conflict, report the conflict.
 

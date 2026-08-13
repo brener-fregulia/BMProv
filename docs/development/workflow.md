@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines how approved BMProv work is executed.
+This document defines how approved Bamep work is executed.
 
 Related responsibilities:
 

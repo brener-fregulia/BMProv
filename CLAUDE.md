@@ -5,7 +5,7 @@
 ## Role
 
 Claude Code is a primary tool for technical analysis, Discovery, specification,
-implementation, testing, investigation, and review in BMProv.
+implementation, testing, investigation, and review in Bamep.
 
 Repository rules and engineering process are defined by `AGENTS.md` and
 `docs/development/`.
@@ -74,7 +74,7 @@ Do not delegate the same work repeatedly without a concrete reason.
 - Verify repository commands before executing them.
 - Do not install system dependencies or change global configuration without explicit
   permission.
-- Do not infer BMProv architecture or technology choices from FORGE, Pascoal, or
+- Do not infer Bamep architecture or technology choices from FORGE, Pascoal, or
   another project.
 - Use `docs/development/sdd.md` for Discovery, Specification, Technical Spikes, and
   approval boundaries.

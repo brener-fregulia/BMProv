@@ -1,6 +1,6 @@
 ---
 name: update-documentation
-description: Update BMProv documentation in the correct authoritative location while preserving implemented reality, accepted decisions, terminology, and source-of-truth boundaries.
+description: Update Bamep documentation in the correct authoritative location while preserving implemented reality, accepted decisions, terminology, and source-of-truth boundaries.
 argument-hint: "[documentation task, files, behavior, Specification, ADR, or reference finding]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Purpose
 
-Use this skill for explicit BMProv documentation work.
+Use this skill for explicit Bamep documentation work.
 
 It updates durable project knowledge in the source that owns it.
 
@@ -43,7 +43,7 @@ It must not invent product behavior, silently establish architecture, or create 
 
 7. Prefer links to authoritative detail over copied explanations.
 
-8. Preserve established BMProv terminology and historical decision context.
+8. Preserve established Bamep terminology and historical decision context.
 
 9. Validate the changed documentation.
 
@@ -99,7 +99,7 @@ Report useful out-of-scope findings separately.
 
 Follow the language rules in `AGENTS.md`.
 
-Canonical BMProv engineering documentation remains in English.
+Canonical Bamep engineering documentation remains in English.
 
 ## Git and GitHub
 

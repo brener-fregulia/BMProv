@@ -2,11 +2,11 @@
 
 FORGE was a previous private PoC/TCC project.
 
-BMProv does not copy its source code or Git history. This document preserves only
+Bamep does not copy its source code or Git history. This document preserves only
 sanitized technical observations and lessons from that work.
 
-These findings are historical evidence, not BMProv architectural requirements.
-Current BMProv requirements and architectural direction belong in Specifications,
+These findings are historical evidence, not Bamep architectural requirements.
+Current Bamep requirements and architectural direction belong in Specifications,
 Discovery, and ADRs.
 
 ## Validated observations
@@ -32,13 +32,13 @@ The previous PoC demonstrated that:
 - updating the Agent runtime independently from the initramfs significantly improved
   development iteration speed.
 
-These observations may inform BMProv design, but their architectural implications
+These observations may inform Bamep design, but their architectural implications
 must be established through the normal SDD process.
 
 ## PoC technology choices
 
 The following were implementation choices of the previous PoC and are not inherited
-BMProv constraints:
+Bamep constraints:
 
 - FastAPI/Python;
 - PostgreSQL;
@@ -56,7 +56,7 @@ BMProv constraints:
 - remote terminal as a normal production capability.
 
 Their previous use is evidence that they existed in the PoC, not justification for
-selecting or rejecting them in BMProv without current requirements and analysis.
+selecting or rejecting them in Bamep without current requirements and analysis.
 
 ## Problematic patterns observed in the PoC
 
@@ -79,7 +79,7 @@ The previous implementation exposed limitations associated with:
 - automated tests introduced late.
 
 This section records historical engineering evidence. It does not independently
-define BMProv architecture or requirements.
+define Bamep architecture or requirements.
 
-See `../discovery/architecture-redesign.md` for the current BMProv direction derived
+See `../discovery/architecture-redesign.md` for the current Bamep direction derived
 from these and other inputs.

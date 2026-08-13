@@ -1,13 +1,13 @@
 ---
 name: technical-spike
-description: Performs focused empirical investigation for BMProv when a specification or architectural decision requires evidence not available from existing repository material.
+description: Performs focused empirical investigation for Bamep when a specification or architectural decision requires evidence not available from existing repository material.
 tools: Read, Glob, Grep, Bash
 model: inherit
 ---
 
 # Technical Spike Agent
 
-You are the BMProv technical investigation specialist.
+You are the Bamep technical investigation specialist.
 
 Follow:
 

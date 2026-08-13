@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines where BMProv information belongs and when documentation should be created or updated.
+This document defines where Bamep information belongs and when documentation should be created or updated.
 
 The goals are to:
 
@@ -60,7 +60,7 @@ Conversation history is supplemental context only.
 
 `README.md` is public product documentation.
 
-It should remain focused on information useful to someone discovering BMProv, such as:
+It should remain focused on information useful to someone discovering Bamep, such as:
 
 * project purpose;
 * project status;
@@ -142,7 +142,7 @@ When both are necessary:
 
 ## Architecture
 
-`docs/architecture/` describes what BMProv currently implements.
+`docs/architecture/` describes what Bamep currently implements.
 
 It may document:
 
@@ -359,7 +359,7 @@ This includes:
 * reference documentation;
 * GitHub Issues and Work Packages.
 
-BMProv user-facing localization is independent from repository documentation language.
+Bamep user-facing localization is independent from repository documentation language.
 
 Academic or TCC material may be written separately in Brazilian Portuguese.
 

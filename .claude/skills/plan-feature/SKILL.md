@@ -1,6 +1,6 @@
 ---
 name: plan-feature
-description: Run read-only BMProv Discovery and produce an evidence-based SDD proposal before GitHub materialization.
+description: Run read-only Bamep Discovery and produce an evidence-based SDD proposal before GitHub materialization.
 argument-hint: "[idea, problem, task, issue, or objective]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Purpose
 
-Use this skill to turn an informal BMProv idea, problem, task, or objective into an evidence-based proposal before implementation or GitHub materialization.
+Use this skill to turn an informal Bamep idea, problem, task, or objective into an evidence-based proposal before implementation or GitHub materialization.
 
 This skill performs Discovery and Specification only.
 
