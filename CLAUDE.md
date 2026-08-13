@@ -29,14 +29,20 @@ Specifications, architecture, ADRs, and GitHub context before proposing changes.
 
 ## Skills
 
-Use project skills under `.claude/skills/` when their procedure matches the task.
+Project skills under `.claude/skills/` are user-invoked workflow commands.
 
-- Follow the skill's scope, restrictions, validation requirements, and output
-  expectations.
-- Do not invent or claim to have executed a missing skill.
-- Skills cannot override `AGENTS.md`.
-- Do not use an implementation skill to bypass Discovery, Specification, owner
-  approval, or a required Technical Spike.
+When the user invokes a project skill:
+
+- follow the skill's scope, procedure, restrictions, validation requirements, and output expectations;
+- treat the invocation as authorization to run that workflow, not as authorization for otherwise restricted Git, GitHub, publication, infrastructure, or destructive operations;
+- do not invent or claim to have executed a missing skill;
+- do not use a skill to bypass Discovery, Specification, owner approval, or a required Technical Spike.
+
+Project skills use `disable-model-invocation: true` intentionally.
+
+Claude must not assume that a project skill can be loaded or invoked automatically.
+
+Skills cannot override `AGENTS.md`.
 
 ## Subagents
 

@@ -30,7 +30,7 @@ Relevant responsibilities include:
 * implementation and tests: currently implemented behavior;
 * `AGENTS.md`: mandatory repository-wide agent rules;
 * `docs/discovery/`: investigation and evidence gathered before decisions;
-* `docs/specifications/`: persistent approved specifications when repository-level documentation is appropriate;
+* `docs/specifications/`: persistent specifications when repository-level documentation is appropriate;
 * `docs/architecture/`: currently implemented architecture;
 * `docs/decisions/`: Architectural Decision Records;
 * `docs/development/`: engineering process;
