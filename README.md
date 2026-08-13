@@ -2,7 +2,7 @@
 
 > Open-source bare-metal provisioning platform.
 
-Bamep is a platform for provisioning, recovery, and orchestration of physical endpoints over local networks.
+Bamep (Bare-Metal Provisioning) is a platform for provisioning, recovery, and orchestration of physical endpoints over local networks.
 
 The project is designed around automated bare-metal workflows such as network boot, hardware and storage inventory, backup and recovery, operating system deployment, and post-install automation.
 
