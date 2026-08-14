@@ -24,12 +24,12 @@ An Endpoint's trust and operational readiness are governed by **three independen
 - **Enrolled** — an operator has approved the Endpoint. This is the durable trusted-identity state; it persists across reconnects, reboots, and credential renewal (see "Credential/session lifecycle") and is not re-derived on every connection.
 - **Retired** — an operator has explicitly retired the Endpoint (e.g., decommissioned hardware); no further Jobs may target it.
 
-**Future extension, not required in M0**: a **PreAuthorized** state, where an operator explicitly authorizes an enrollment context/token before the endpoint's first connection. On first successful connection with a valid pre-authorized token, the record moves directly to `Enrolled` without a separate post-connection approval step. This is still gated by an explicit prior operator action — authorizing before contact rather than approving after — and must not be implemented as, or conflated with, unrestricted automatic enrollment. Designing this mechanism is out of scope for M0.
+The identity lifecycle intentionally has exactly these four states. Future pre-authorized enrollment (see "Future capability: pre-authorized enrollment" below) is an enrollment-authorization mechanism, modeled separately — it is not a fifth identity-lifecycle state.
 
 Transitions:
 
-- `(no record)` → `PendingEnrollment`: on first successful credential exchange with no matching prior record (M0 default path).
-- `(no record)` → `Enrolled` *(future, not M0)*: on first successful connection that redeems a valid pre-authorized token.
+- `(no record)` → `PendingEnrollment`: on first successful credential exchange with no matching prior record and no valid pre-authorization token redeemed (M0 default path).
+- `(no record)` → `Enrolled`: on first successful credential exchange that redeems a valid, unexpired pre-authorization token (future capability, not required in M0; see below).
 - `PendingEnrollment` → `Enrolled`: explicit operator approval action only.
 - `PendingEnrollment` → discarded: not approved (retention/cleanup policy is an implementation-time detail).
 - `Enrolled` → `Retired`: explicit operator action only.
@@ -46,11 +46,21 @@ This dimension cycles repeatedly and independently across an Endpoint's lifetime
 
 ### 3. Hardware/identity-confidence state (continuously evaluated, not a lifecycle)
 
-- **Consistent** — observed inventory signals match the Endpoint's recorded signals; no discrepancy.
-- **LoweredConfidence** — a hardware change was observed (e.g., one of several NICs replaced) that the owner's direction requires surfacing for operator review, but that does not by itself indicate the Endpoint is a different physical device. Does not block reconnect, credential renewal, or destructive operations on its own.
-- **Conflict** — a discrepancy serious enough that continuity of the trusted identity cannot be assumed. Blocks destructive operations (see precondition 6 below) until resolved.
+- **Consistent** — observed inventory signals match the Endpoint's recorded signals; no discrepancy. Required for destructive execution.
+- **LoweredConfidence** — a hardware change was observed (e.g., one of several NICs replaced) that requires surfacing for operator review, but that does not by itself indicate the Endpoint is a different physical device. Permits normal connection, authentication (when otherwise valid), credential/session renewal, and non-destructive inventory or diagnostic activity. **Blocks destructive execution** (see precondition 6 below) until the confidence issue is resolved through operator review or explicit revalidation.
+- **Conflict** — a discrepancy serious enough that continuity of the trusted identity cannot be assumed. Blocks destructive operations (see precondition 6 below), and — unlike `LoweredConfidence` — is treated as breaking continuity for reconnect/renewal purposes as well (see "Reconnect / credential renewal handling").
 
-This dimension can change at any time based on newly observed inventory signals, independent of the other two dimensions. It is resolved back to `Consistent` only through explicit operator review/confirmation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict` are implementation-time policy, intentionally not decided here (see "Open questions").
+This dimension can change at any time based on newly observed inventory signals, independent of the other two dimensions. It is resolved back to `Consistent` only through explicit operator review/confirmation or explicit revalidation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict`, and the exact mechanics of "explicit revalidation," are implementation-time policy, intentionally not decided here (see "Open questions").
+
+## Future capability: pre-authorized enrollment (not an identity-lifecycle state)
+
+An operator may, in a future capability not required for M0, explicitly authorize an enrollment context/token before a specific endpoint's first connection. This is an **enrollment-authorization mechanism**, conceptually separate from and prior to the Endpoint identity lifecycle — it is not a state an Endpoint identity occupies.
+
+A pre-authorization artifact has its own minimal lifecycle (e.g., issued → redeemed → expired/revoked) scoped to the authorization context/token itself, not to any Endpoint identity record — no Endpoint identity record exists yet when the token is issued.
+
+When a booting endpoint successfully redeems a valid, unexpired pre-authorization token during the enrollment/credential exchange (ADR-0004), the resulting Endpoint identity record is created directly in the `Enrolled` state, skipping `PendingEnrollment`, because the required operator approval already happened — before contact instead of after.
+
+This capability must not be implemented as, or conflated with, unrestricted automatic enrollment: it still requires an explicit prior operator action per endpoint or per authorization context. Its concrete design (token format, scope, expiry, issuance UX) is out of scope for M0.
 
 ## Destructive-operation authorization preconditions
 
@@ -61,7 +71,7 @@ Before any destructive operation executes against an Endpoint, **all** of the fo
 3. **Authorized Job/action** — the specific Job/action targeting this Endpoint has its own authorization. This precondition dimension is required here; what "authorized" means for a Job/action is owned by the Job lifecycle Work Package (Issue #4) and is not defined by this Specification.
 4. **Sufficiently fresh inventory** — the inventory revision the operation was authorized against matches the Endpoint's current inventory revision.
 5. **Target disk identity/fingerprint revalidation** — the target disk/volume identity/fingerprint matches what the operation was authorized against, revalidated immediately before execution.
-6. **No unresolved identity or hardware-confidence conflict** — the confidence dimension is not `Conflict`.
+6. **Hardware confidence is sufficiently trusted** — the confidence dimension is `Consistent`. Both `LoweredConfidence` and `Conflict` block destructive execution until the confidence issue has been resolved through explicit operator review or revalidation; for this precondition the two levels are not treated differently, even though they differ for reconnect, renewal, and non-destructive activity (see "Hardware/identity-confidence state" and "Reconnect / credential renewal handling" above).
 
 Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition set is normative for Issues #4 and #6, which should reference it directly rather than re-derive or narrow it to a single check.
 
@@ -69,14 +79,15 @@ Any of these failing must block the destructive operation and surface a clear re
 
 Owner decision: once an Endpoint has been explicitly enrolled, normal reconnects, reboots, and credential renewal must not require repeated operator approval when continuity of the trusted identity can be established.
 
-- Continuity is established when the identity dimension is `Enrolled` and the confidence dimension is not `Conflict`. `LoweredConfidence` alone does not interrupt continuity or require re-approval — it surfaces for operator awareness and review without blocking reconnect or renewal. Whether a `LoweredConfidence` condition should ever escalate to `Conflict` automatically past some severity, or only through operator judgment, is implementation-time policy, not decided here.
+- Continuity, for reconnect/renewal purposes, is established when the identity dimension is `Enrolled` and the confidence dimension is not `Conflict`. `LoweredConfidence` alone does not interrupt this continuity or require re-approval — it surfaces for operator awareness and review without blocking reconnect, renewal, authentication, or non-destructive activity. Whether a `LoweredConfidence` condition should ever escalate to `Conflict` automatically past some severity, or only through operator judgment, is implementation-time policy, not decided here.
+- Continuity for reconnect/renewal is evaluated separately from eligibility for destructive execution: `LoweredConfidence` does not block reconnect/renewal, but — like `Conflict` — it does block destructive operations under precondition 6 above until resolved.
 - A reconnecting Agent still re-authenticates and redeems a fresh runtime credential each time (mechanism owned by Issue #3); this does not require re-running operator approval as long as continuity holds.
 - A destructive command issued before a disconnect must never be blindly replayed on reconnect. Whether and how an interrupted destructive JobStep resumes is owned by the Job lifecycle Work Package (Issue #4); that Work Package must treat "Agent reconnected" and "destructive step may safely resume" as separate questions, both gated by the destructive-operation preconditions above.
 
 ## Out of scope
 
-- exact confidence thresholds distinguishing `LoweredConfidence` from `Conflict` — implementation-time policy;
-- the pre-authorized enrollment mechanism — future extension, not required in M0;
+- exact confidence thresholds distinguishing `LoweredConfidence` from `Conflict`, and the exact mechanics of "explicit revalidation" — implementation-time policy;
+- the pre-authorized enrollment mechanism (token format, scope, expiry, issuance UX) — future capability, not required in M0;
 - Agent/Server mutual authentication mechanism (Issue #3);
 - Job/action authorization semantics (Issue #4);
 - Job/JobStep resumption semantics after reconnect (Issue #4) — this Specification defines only the precondition those semantics must satisfy;
@@ -85,8 +96,9 @@ Owner decision: once an Endpoint has been explicitly enrolled, normal reconnects
 ## Acceptance criteria
 
 - Endpoint identity lifecycle, credential/session lifecycle, and hardware-confidence state are defined as independent dimensions, satisfying Issue #2's acceptance criterion for "a Specification defining the identity lifecycle" and correcting the earlier single-state-machine conflation identified during owner review.
-- Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check.
-- Reconnect/credential-renewal behavior matches the owner's continuity decision (no repeated approval when continuity holds).
+- The Endpoint identity lifecycle contains exactly four states (`(no record)`, `PendingEnrollment`, `Enrolled`, `Retired`); pre-authorized enrollment is modeled as a separate future enrollment-authorization mechanism, not a fifth identity state.
+- Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check; both `LoweredConfidence` and `Conflict` block destructive execution.
+- Reconnect/credential-renewal behavior matches the owner's continuity decision (no repeated approval when continuity holds, and `LoweredConfidence` alone does not interrupt continuity even though it blocks destructive execution).
 
 ## Validation expectations
 
@@ -107,8 +119,8 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 
 ## Open questions
 
-1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, and whether escalation between them can ever be automatic — implementation-time policy, not an M0 architectural blocker.
+1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, whether escalation between them can ever be automatic, and the exact mechanics of "explicit revalidation" — implementation-time policy, not an M0 architectural blocker.
 2. Exact credential TTL/renewal policy — implementation-time detail, intentionally left unresolved here.
-3. Design of the future pre-authorized enrollment mechanism — explicitly not required for M0.
+3. Design of the future pre-authorized enrollment mechanism (token format, scope, expiry, issuance UX) — explicitly not required for M0.
 
 Status: Approved.
