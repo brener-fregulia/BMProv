@@ -1,91 +1,114 @@
 # M0 — Endpoint Identity Lifecycle
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
-This Specification defines the Endpoint identity lifecycle states, transitions, and the destructive-operation identity precondition required by M0, executing Issue #2 (`[WP] Define endpoint identity and trust model`) together with ADR-0004 (Endpoint identity and enrollment/trust bootstrap model).
+This Specification defines the Endpoint identity lifecycle, credential/session lifecycle, hardware-confidence state, and the destructive-operation authorization preconditions required by M0, executing Issue #2 (`[WP] Define endpoint identity and trust model`) together with ADR-0004 (Endpoint identity and enrollment/trust bootstrap model, `Accepted`).
 
-ADR-0004 contains one open decision (auto-trust vs. operator-approval-gated first enrollment). This Specification's `PendingEnrollment` state is conditional on that decision; everything else below does not depend on it.
+Operator-approval-gated first enrollment is the accepted M0 default (ADR-0004): a newly observed device must not automatically become a trusted Endpoint merely because it can reach the Bamep Server.
 
 ## Identity model
 
 - Durable Endpoint identity is a Server-assigned identifier, independent of MAC/hardware.
 - Inventory signals (MAC, disk fingerprint, hardware serials when available) are evidence attached to an Endpoint record, never the identity itself (`AGENTS.md`; `docs/discovery/architecture-redesign.md` "Security invariants").
 
-## Lifecycle states
+## State dimensions
 
-- **(no record)** — no boot/enrollment attempt has been observed yet; not a persisted state.
-- **PendingEnrollment** — a first-seen endpoint has completed the credential exchange but is not yet trusted. Reachable only if the owner accepts operator-approval-gated enrollment in ADR-0004; if auto-trust is accepted instead, this state is skipped and endpoints move directly to `Enrolled`.
-- **Enrolled** — the Endpoint identity record exists and is trusted for inventory purposes. Does not by itself authorize destructive operations.
-- **CredentialActive** — a runtime Agent identity/session credential is currently valid for this Endpoint.
-- **CredentialExpired** / **CredentialRevoked** — the runtime credential is no longer valid; the Agent must re-redeem before further action is accepted from it.
-- **StaleHardwareSignal** — an observed inventory signal (MAC, disk fingerprint) no longer matches the Endpoint's recorded signals. Destructive operations must not proceed against this Endpoint until an operator resolves the discrepancy.
+An Endpoint's trust and operational readiness are governed by **three independent state dimensions**, not one mutually exclusive machine. An earlier draft of this Specification collapsed persistent identity, credential/session validity, and hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal` state alongside `CredentialActive`); that conflated concerns that legitimately coexist — an `Enrolled` Endpoint can simultaneously have an expired credential and lowered hardware confidence, and forcing that into one mutually exclusive machine would make the combination unrepresentable or misleading. The three dimensions below may combine freely.
+
+### 1. Endpoint identity lifecycle (persistent record)
+
+- **(no record)** — no enrollment attempt has been observed yet; not a persisted state.
+- **PendingEnrollment** — a first-seen endpoint has completed the credential exchange but is not yet trusted. This is the M0 default path (ADR-0004: operator-approval-gated enrollment).
+- **Enrolled** — an operator has approved the Endpoint. This is the durable trusted-identity state; it persists across reconnects, reboots, and credential renewal (see "Credential/session lifecycle") and is not re-derived on every connection.
 - **Retired** — an operator has explicitly retired the Endpoint (e.g., decommissioned hardware); no further Jobs may target it.
 
-## Transition rules
+**Future extension, not required in M0**: a **PreAuthorized** state, where an operator explicitly authorizes an enrollment context/token before the endpoint's first connection. On first successful connection with a valid pre-authorized token, the record moves directly to `Enrolled` without a separate post-connection approval step. This is still gated by an explicit prior operator action — authorizing before contact rather than approving after — and must not be implemented as, or conflated with, unrestricted automatic enrollment. Designing this mechanism is out of scope for M0.
 
-Illustrative and sufficient to bound implementation; the exhaustive transition table is implementation-time work once ADR-0004's open decision is resolved.
+Transitions:
 
-- `(no record)` → `PendingEnrollment` or `Enrolled`: on successful credential redemption (branch depends on ADR-0004's accepted enrollment mode).
-- `PendingEnrollment` → `Enrolled`: only via explicit operator approval action.
-- `PendingEnrollment` → discarded: if never approved (retention/cleanup policy is an implementation-time detail).
-- `Enrolled` → `CredentialActive`: on successful runtime credential issuance.
-- `CredentialActive` → `CredentialExpired`: on credential expiry (TTL is an implementation-time detail).
-- `CredentialActive` / `CredentialExpired` → `CredentialActive`: on successful re-redemption/reconnect.
-- `Enrolled` / `CredentialActive` → `StaleHardwareSignal`: on detecting a mismatched inventory signal against the recorded record.
-- `StaleHardwareSignal` → `Enrolled`: only via explicit operator confirmation, never automatically.
-- `Enrolled` / `CredentialActive` / `StaleHardwareSignal` → `Retired`: explicit operator action only.
+- `(no record)` → `PendingEnrollment`: on first successful credential exchange with no matching prior record (M0 default path).
+- `(no record)` → `Enrolled` *(future, not M0)*: on first successful connection that redeems a valid pre-authorized token.
+- `PendingEnrollment` → `Enrolled`: explicit operator approval action only.
+- `PendingEnrollment` → discarded: not approved (retention/cleanup policy is an implementation-time detail).
+- `Enrolled` → `Retired`: explicit operator action only.
+- `Enrolled` does **not** revert to `PendingEnrollment` on reconnect, reboot, or credential renewal — see "Reconnect / credential renewal handling."
 
-## Destructive-operation identity precondition
+### 2. Credential/session lifecycle (independent of identity lifecycle)
 
-Before any destructive operation executes against an Endpoint, all of the following must hold:
+- **NoActiveCredential** — no runtime credential currently issued (e.g., Endpoint offline, or not yet past enrollment).
+- **CredentialActive** — a runtime Agent identity/session credential is currently valid.
+- **CredentialExpired** — the runtime credential's validity period has elapsed.
+- **CredentialRevoked** — the runtime credential was explicitly invalidated (operator action, or Server-driven revocation, e.g. as a consequence of a `Conflict` hardware-confidence state).
 
-1. the Endpoint is not in `StaleHardwareSignal` or `Retired`;
-2. the Endpoint's runtime credential is in `CredentialActive` at authorization time;
-3. the inventory revision the operation was authorized against matches the Endpoint's current inventory revision;
-4. the target disk/volume identity/fingerprint matches what the operation was authorized against.
+This dimension cycles repeatedly and independently across an Endpoint's lifetime (every reconnect, every renewal) and does not by itself change the Endpoint identity lifecycle state. The concrete authentication mechanism that establishes `CredentialActive` is owned by the Agent control-protocol Work Package (Issue #3); this Specification only defines the resulting state, not the mechanism.
 
-Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition is normative for Issues #4 and #6, which should reference it directly rather than re-derive it.
+### 3. Hardware/identity-confidence state (continuously evaluated, not a lifecycle)
 
-## Reconnect / stale-command handling
+- **Consistent** — observed inventory signals match the Endpoint's recorded signals; no discrepancy.
+- **LoweredConfidence** — a hardware change was observed (e.g., one of several NICs replaced) that the owner's direction requires surfacing for operator review, but that does not by itself indicate the Endpoint is a different physical device. Does not block reconnect, credential renewal, or destructive operations on its own.
+- **Conflict** — a discrepancy serious enough that continuity of the trusted identity cannot be assumed. Blocks destructive operations (see precondition 6 below) until resolved.
 
-- A reconnecting Agent must re-authenticate; the Server must not resume a previous runtime credential automatically merely because MAC/hardware signals match (ADR-0004 "Reconnect handling").
-- A destructive command issued before a disconnect must not be blindly replayed on reconnect. Whether and how an interrupted destructive JobStep resumes is owned by the Job lifecycle Work Package (Issue #4); that Work Package must treat "Agent reconnected" and "destructive step may safely resume" as separate questions, both gated by the identity precondition above.
+This dimension can change at any time based on newly observed inventory signals, independent of the other two dimensions. It is resolved back to `Consistent` only through explicit operator review/confirmation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict` are implementation-time policy, intentionally not decided here (see "Open questions").
+
+## Destructive-operation authorization preconditions
+
+Before any destructive operation executes against an Endpoint, **all** of the following independent preconditions must hold. None may be inferred from another — in particular, `Enrolled` alone is never sufficient:
+
+1. **Trusted persistent Endpoint identity** — identity-lifecycle dimension is `Enrolled` (not `PendingEnrollment`, not `Retired`).
+2. **Authenticated current Agent session** — credential dimension is `CredentialActive`. The authentication mechanism itself is owned by Issue #3, not this Specification.
+3. **Authorized Job/action** — the specific Job/action targeting this Endpoint has its own authorization. This precondition dimension is required here; what "authorized" means for a Job/action is owned by the Job lifecycle Work Package (Issue #4) and is not defined by this Specification.
+4. **Sufficiently fresh inventory** — the inventory revision the operation was authorized against matches the Endpoint's current inventory revision.
+5. **Target disk identity/fingerprint revalidation** — the target disk/volume identity/fingerprint matches what the operation was authorized against, revalidated immediately before execution.
+6. **No unresolved identity or hardware-confidence conflict** — the confidence dimension is not `Conflict`.
+
+Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition set is normative for Issues #4 and #6, which should reference it directly rather than re-derive or narrow it to a single check.
+
+## Reconnect / credential renewal handling
+
+Owner decision: once an Endpoint has been explicitly enrolled, normal reconnects, reboots, and credential renewal must not require repeated operator approval when continuity of the trusted identity can be established.
+
+- Continuity is established when the identity dimension is `Enrolled` and the confidence dimension is not `Conflict`. `LoweredConfidence` alone does not interrupt continuity or require re-approval — it surfaces for operator awareness and review without blocking reconnect or renewal. Whether a `LoweredConfidence` condition should ever escalate to `Conflict` automatically past some severity, or only through operator judgment, is implementation-time policy, not decided here.
+- A reconnecting Agent still re-authenticates and redeems a fresh runtime credential each time (mechanism owned by Issue #3); this does not require re-running operator approval as long as continuity holds.
+- A destructive command issued before a disconnect must never be blindly replayed on reconnect. Whether and how an interrupted destructive JobStep resumes is owned by the Job lifecycle Work Package (Issue #4); that Work Package must treat "Agent reconnected" and "destructive step may safely resume" as separate questions, both gated by the destructive-operation preconditions above.
 
 ## Out of scope
 
-- the concrete enrollment-mode decision (auto-trust vs. operator-approval-gated) — open in ADR-0004; this Specification's `PendingEnrollment` state is conditional on it;
+- exact confidence thresholds distinguishing `LoweredConfidence` from `Conflict` — implementation-time policy;
+- the pre-authorized enrollment mechanism — future extension, not required in M0;
 - Agent/Server mutual authentication mechanism (Issue #3);
-- Job/JobStep resumption semantics after reconnect (Issue #4) — this Specification defines only the identity precondition those semantics must satisfy;
+- Job/action authorization semantics (Issue #4);
+- Job/JobStep resumption semantics after reconnect (Issue #4) — this Specification defines only the precondition those semantics must satisfy;
 - production enrollment UX/workflow implementation.
 
 ## Acceptance criteria
 
-- Identity lifecycle states and transition principles are defined, satisfying Issue #2's acceptance criterion for "a Specification defining the identity lifecycle."
-- The destructive-operation identity precondition is explicit and referenceable by Issues #4 and #6 without re-derivation.
-- Stale-state and reconnect handling are explicit, consistent with the safety constraint that reconnect must not blindly re-establish trust.
+- Endpoint identity lifecycle, credential/session lifecycle, and hardware-confidence state are defined as independent dimensions, satisfying Issue #2's acceptance criterion for "a Specification defining the identity lifecycle" and correcting the earlier single-state-machine conflation identified during owner review.
+- Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check.
+- Reconnect/credential-renewal behavior matches the owner's continuity decision (no repeated approval when continuity holds).
 
 ## Validation expectations
 
-Automated: none produced directly by this Work Package (decision/specification work). Once identity/enrollment is implemented, expected validation includes domain tests for the state transitions above (valid and rejected transitions, per `docs/development/testing.md` "Unit and domain tests") and negative cases demonstrating that `StaleHardwareSignal` and `Retired` endpoints reject destructive operations. Per `docs/development/testing.md` "Local development environments," such domain and integration tests are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
+Automated: none produced directly by this Work Package (decision/specification work). Once identity/enrollment is implemented, expected validation includes domain tests for each dimension's transitions independently (valid and rejected transitions, per `docs/development/testing.md` "Unit and domain tests"), tests covering combined states (e.g., `Enrolled` + `CredentialExpired` + `LoweredConfidence`), and negative cases demonstrating that a `Conflict` confidence state or a non-`Enrolled`/non-`CredentialActive` Endpoint rejects destructive operations. Per `docs/development/testing.md` "Local development environments," such domain and integration tests are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
 
-Manual: owner approval of this Specification and ADR-0004.
+Manual: owner approval of this Specification and ADR-0004 — both confirmed (see Status).
 
 ## Related ADRs
 
-- ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (`Proposed`; this Specification's `PendingEnrollment` branch depends on its open decision).
+- ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (`Accepted`; operator-approval-gated first enrollment is the M0 default).
 
 ## Related work
 
 - Issue #2 — `[WP] Define endpoint identity and trust model`.
-- Issue #3 — `[WP] Define Agent control and action contracts` (mutual-authentication mechanism).
-- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (consumes the destructive-operation identity precondition).
-- Issue #6 — `[WP] Define data-plane and storage contracts` (consumes the destructive-operation identity precondition).
+- Issue #3 — `[WP] Define Agent control and action contracts` (mutual-authentication mechanism establishing `CredentialActive`).
+- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (owns Job/action authorization semantics and destructive-step resumption; consumes the preconditions above).
+- Issue #6 — `[WP] Define data-plane and storage contracts` (consumes the destructive-operation authorization preconditions).
 
 ## Open questions
 
-1. Same open decision as ADR-0004: auto-trust vs. operator-approval-gated first enrollment — determines whether `PendingEnrollment` is a real state or is skipped.
-2. Exact credential TTL/renewal policy — an implementation-time detail, not an M0 architectural blocker, intentionally left unresolved here.
+1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, and whether escalation between them can ever be automatic — implementation-time policy, not an M0 architectural blocker.
+2. Exact credential TTL/renewal policy — implementation-time detail, intentionally left unresolved here.
+3. Design of the future pre-authorized enrollment mechanism — explicitly not required for M0.
 
-Status: Proposed - awaiting owner approval.
+Status: Approved.
