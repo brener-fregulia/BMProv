@@ -324,6 +324,52 @@ Use:
 
 Created resources should be cleaned up after success and failure when practical.
 
+## Local development environments
+
+Linux is the reference environment for Bamep Server, Agent, Worker, Simulator, and
+Linux-specific integration behavior.
+
+When development or validation is performed from Windows 11:
+
+- prefer WSL2 for Linux-targeted builds, tests, scripts, process behavior, filesystem
+  behavior, and local simulation when WSL2 can represent the responsibility faithfully;
+- do not treat successful native-Windows execution as proof that Linux-specific
+  behavior is correct;
+- use native Windows tooling for responsibilities that are intentionally portable,
+  such as appropriate Web/frontend development and platform-independent tests.
+
+Containers may be used when they improve isolation, reproducibility, or disposable
+test setup.
+
+Appropriate containerized scenarios may include:
+
+- local service dependencies;
+- controlled protocol peers;
+- disposable databases;
+- isolated adapter dependencies;
+- Simulator scenarios;
+- repeatable integration fixtures.
+
+Containerization is a development and testing technique, not an assumed Bamep
+production deployment model.
+
+Do not introduce Docker or another container runtime as a product dependency merely
+to simplify local testing.
+
+Containers and WSL2 must not be treated as faithful substitutes for behavior that
+depends on:
+
+- PXE or DHCP interaction with the physical network;
+- firmware or UEFI behavior;
+- Secure Boot;
+- physical NIC behavior;
+- real block devices or hardware-specific disk tooling;
+- WinPE;
+- hardware-specific compatibility.
+
+Use the Integration Environment for those cases when local virtualization or
+simulation cannot provide sufficient evidence.
+
 ## Integration Environment
 
 The physical Bamep laboratory exists for behavior that cannot be validated faithfully through local tests or simulation.
