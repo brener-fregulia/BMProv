@@ -10,6 +10,21 @@ implementation, testing, investigation, and review in Bamep.
 Repository rules and engineering process are defined by `AGENTS.md` and
 `docs/development/`.
 
+## Interaction language
+
+Use Brazilian Portuguese (`pt-BR`) when communicating with the repository owner by
+default.
+
+- Prefer natural Brazilian Portuguese for explanations, questions, summaries, and
+  workflow output.
+- Use another language only when the owner requests it or when preserving source text
+  exactly is important.
+- Keep repository content, source code, identifiers, documentation, GitHub Issues,
+  ADRs, Specifications, and other persistent project artifacts in English as defined
+  by `AGENTS.md`.
+- Do not translate commands, paths, identifiers, API fields, or tool output merely for
+  conversational consistency.
+
 ## Context management
 
 - Treat the current repository as authoritative over prior conversation context.
