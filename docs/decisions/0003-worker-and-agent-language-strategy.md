@@ -1,6 +1,6 @@
 # ADR-0003: Worker and Agent implementation language strategy
 
-Status: Proposed
+Status: Accepted
 
 ## Context
 
@@ -11,7 +11,7 @@ With ADR-0002 fixing Rust for the Bamep Server, M0 also requires evaluating the 
 
 Issue #1 records explicit owner direction that this decision is intentionally left open: "The Worker language is intentionally unresolved. Rust and Go are the primary candidates... Do not select Go solely as a learning opportunity" and "Do not assume the Agent must use the same language as the Server without evaluating its own constraints."
 
-This ADR is **not** an acceptance of a final decision. It records the evaluation and a recommendation, and is submitted as `Proposed` per `docs/development/sdd.md`'s owner-approval requirement for architectural decisions with meaningful alternatives.
+This ADR records the evaluation performed against that instruction and the owner's resulting decision.
 
 ## Evaluation
 
@@ -27,11 +27,13 @@ This ADR is **not** an acceptance of a final decision. It records the evaluation
 
 **Cross-cutting factor**: `docs/discovery/architecture-redesign.md` explicitly frames the language question in terms of "the cost of operating a polyglot stack as a primarily solo-maintained project." A single language across Server, Worker, and Agent minimizes the number of toolchains, dependency ecosystems, and CI/release pipelines one maintainer must operate, and maximizes direct sharing of protocol/contract types between components without an additional schema-generation step.
 
-## Recommendation (not accepted)
+## Decision
 
-Rust for both Worker and Agent, for consistency with the Server (ADR-0002), the solo-maintainer cost argument above, and no identified requirement that specifically favors Go's concurrency model or footprint for either workload.
+Rust is accepted as the implementation language for both the Worker and the Agent, for consistency with the Server (ADR-0002), the solo-maintainer cost argument above, and because no identified requirement specifically favors Go's concurrency model or footprint for either workload.
 
-This recommendation is not finalized in this ADR: it is a decision with meaningful alternatives, and per `docs/development/sdd.md` "Owner approval," accepting a significant architectural decision requires explicit owner approval rather than being inferred by the executing session.
+**Contract independence is a required constraint of this decision, not an incidental detail.** Using Rust across Server, Worker, and Agent must not make shared Rust types or crates the sole definition of any inter-process or wire contract. The Agent Protocol, the Administrative API, and any other externally relevant contract must remain explicit and independently versioned, as already required by `docs/discovery/architecture-redesign.md` ("Any Agent Protocol must define correlation, acknowledgement, duplicate handling, timeout, reconnect, cancellation, progress, protocol version, and idempotency semantics") and by the packaging baseline's "contracts versioned separately" direction (`docs/specifications/m0-stack-and-boundaries-baseline.md`).
+
+Sharing implementation types or generated representations between Server, Worker, and Agent is allowed where useful (for example, generating Rust bindings from a schema, or sharing an internal crate between same-language components), but the architecture must preserve the ability to implement a contract participant in another language without redefining the protocol. A single-language stack is a deployment and maintenance convenience; it must not become the load-bearing definition of a contract that the Agent Protocol or Administrative API Work Packages (Issues #2, #3) are responsible for specifying explicitly.
 
 ## Alternatives considered
 
@@ -41,9 +43,10 @@ This recommendation is not finalized in this ADR: it is a decision with meaningf
 
 ## Consequences
 
-- If accepted as recommended, Bamep becomes a single-language (Rust) stack across Server, Worker, and Agent, simplifying CI/build/release and maximizing shared crates for protocol/contract types.
-- If the owner instead splits the stack, this ADR must be updated or superseded with the actual accepted decision, and the polyglot-cost trade-off explicitly re-examined rather than silently dropped.
-- Until this ADR is `Accepted`, Worker and Agent implementation must not begin, since their language is not yet a durable decision.
+- Bamep becomes a single-language (Rust) stack across Server, Worker, and Agent, simplifying CI/build/release and enabling shared crates for internal implementation types where useful.
+- The Agent Protocol, Administrative API, and other externally relevant contracts must still be specified explicitly and versioned independently of any shared Rust type — this ADR does not substitute for that contract work, owned by the relevant M0 Work Packages (Issues #2, #3).
+- A future contract participant (e.g., a third-party integration, or a language change for one component) must remain implementable from the versioned contract alone, without needing to read Rust source.
+- Worker and Agent implementation itself remains out of scope for M0; this ADR only fixes the language, not an authorization to begin implementation.
 
 ## Related architecture
 
@@ -53,4 +56,5 @@ This recommendation is not finalized in this ADR: it is a decision with meaningf
 
 ## Related work
 
-- Issue #1 — `[WP] Define product, runtime, and stack architecture baseline`. This ADR being `Proposed` rather than `Accepted` is the explicit isolation of an unresolved question required by that Work Package's acceptance criteria.
+- Issue #1 — `[WP] Define product, runtime, and stack architecture baseline`.
+- Issue #3 — `[WP] Define Agent control and action contracts` (owns the explicit, independently versioned Agent Protocol this ADR's contract-independence constraint depends on).

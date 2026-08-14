@@ -1,6 +1,6 @@
 # M0 — Product, Component, and Packaging Baseline
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
@@ -8,7 +8,7 @@ This Specification persists the M0 scope items "product boundary and domain voca
 
 Runtime topology and language-strategy decisions are recorded separately as ADR-0001, ADR-0002, and ADR-0003 rather than duplicated here.
 
-Most content below restates already Discovery-accepted facts (`docs/discovery/architecture-redesign.md`) in their durable Specification location. The component-boundary section is the one part of this document that goes beyond restating an already-accepted fact — Discovery itself labeled these boundaries "Proposed component boundaries," so their elevation to the M0 baseline here is a proposal requiring explicit owner approval, not a restatement of a prior decision.
+Most content below restates already Discovery-accepted facts (`docs/discovery/architecture-redesign.md`) in their durable Specification location. The component-boundary section elevates Discovery's "Proposed component boundaries" to the M0 baseline; the owner has approved this elevation, with the clarification recorded below that these are responsibility/dependency boundaries, not a mandated physical structure.
 
 ## Product boundary and domain vocabulary
 
@@ -29,7 +29,7 @@ Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general sw
 
 ## Component responsibilities and boundaries
 
-**Proposed for owner approval as the M0 baseline** (elevating Discovery's "Proposed component boundaries"):
+**Approved as the M0 baseline** (elevating Discovery's "Proposed component boundaries"):
 
 - **Presentation**: Web Administration and Administrative API.
 - **Application**: Endpoint Management, Provisioning/Recovery Orchestration, Boot Orchestration, and Artifact Management.
@@ -42,6 +42,8 @@ Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general sw
 The Domain must not depend on GRUB, MikroTik, `/dev/sda`, `snmpwalk`, WebSocket, SQLite, or zstd — those are Adapter responsibilities.
 
 These boundaries apply within the modular-monolith runtime topology accepted in ADR-0001: one deployable Server artifact with the internal boundaries above, plus a separate Worker process/isolation boundary for heavy workloads.
+
+**Nature of these boundaries**: Presentation, Application, Domain, Runtime Services, Ports, Adapters, and Workers are responsibility and dependency boundaries — statements of what may depend on what, and what each responsibility owns — not a mandatory one-to-one mapping to crates, packages, modules, directories, or processes. Workers are the one boundary in this list with an already-accepted physical consequence (a separate process/isolation boundary, per ADR-0001); the others may be implemented as separate crates, as modules within one crate, or in whatever physical arrangement is simplest, as long as the dependency direction and responsibility ownership stated above are preserved (for example, Domain code must not reference Adapter-level concerns such as GRUB, MikroTik, or `/dev/sda`, regardless of whether Domain and Adapters live in separate crates or the same one). Implementation should use the simplest physical structure that preserves these boundaries, and should not introduce crate/package/module fragmentation merely to mirror this list one-to-one.
 
 ## Boot-orchestration architectural boundary
 
@@ -73,7 +75,7 @@ Already-accepted direction, persisted here:
 ## Acceptance criteria
 
 - Product boundary, vocabulary, and non-goals are persisted (M0 acceptance criterion 1) — satisfied by this document.
-- Component responsibilities and boundaries are documented (M0 acceptance criterion 5) — drafted here; becomes settled only once the owner approves the elevation from Discovery's "Proposed" status.
+- Component responsibilities and boundaries are documented (M0 acceptance criterion 5) — satisfied by this document; approved by the owner as responsibility/dependency boundaries, not a mandated physical structure.
 - Packaging and versioning baseline is persisted — satisfied by this document.
 - The boot-orchestration boundary principle is persisted, and the boundary's concrete mechanism is explicitly isolated pending Issue #8 rather than hidden inside a future implementation Work Package (M0 acceptance criterion 7).
 
@@ -81,7 +83,7 @@ Already-accepted direction, persisted here:
 
 - ADR-0001 — Runtime topology: modular monolith with worker/process isolation (`Accepted`).
 - ADR-0002 — Backend/Server implementation language: Rust (`Accepted`).
-- ADR-0003 — Worker and Agent implementation language strategy (`Proposed`, open — owner decision required).
+- ADR-0003 — Worker and Agent implementation language strategy: Rust for both, with contracts kept explicit and independently versioned (`Accepted`).
 
 ## Related work
 
@@ -90,7 +92,8 @@ Already-accepted direction, persisted here:
 
 ## Open questions
 
-1. Does the owner approve elevating Discovery's "Proposed component boundaries" to the accepted M0 baseline as described above, or is a different layering intended?
-2. Does the owner accept ADR-0003's recommendation (Rust for Worker and Agent), or an alternative?
+None remaining for this Specification's scope. Both items previously open here — the component-boundary elevation and the Worker/Agent language strategy (ADR-0003) — were resolved by explicit owner approval, with the clarifications recorded in the "Nature of these boundaries" section above and in ADR-0003's contract-independence constraint.
 
-Status: Proposed - awaiting owner approval.
+The Boot Orchestrator's concrete mechanism remains open pending Issue #8 (see "Boot-orchestration architectural boundary" above) — that is a dependency on a Technical Spike, not an open question of this Specification's own scope.
+
+Status: Approved.
