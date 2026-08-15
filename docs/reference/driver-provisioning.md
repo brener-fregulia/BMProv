@@ -76,7 +76,7 @@ Following owner review, Snappy Driver Installer Origin (SDIO) was evaluated as a
 
 ## Conclusion
 
-The evidence supports a clean separation Bamep can adopt without licensing exposure: an operator-managed, locally staged driver repository as the driver *source*, and DISM (offline image servicing) plus WinPE build-time injection or `drvload` (runtime) as the driver *injection* mechanism Bamep itself owns. This is recorded as an architectural decision in `docs/decisions/0009-driver-provider-integration-boundary.md`. The SDIO case study (Finding 6) does not change this conclusion: it confirms the operator-side-tooling pattern is real and available today, and confirms — via SDIO's own documented live-fetch integration pattern — exactly why a Bamep-invoked online acquisition adapter was correctly rejected.
+The evidence supports a clean separation that reduces Bamep's direct role in acquiring and redistributing third-party driver packages: an operator-managed, locally staged driver repository as the driver *source*, and DISM (offline image servicing) plus WinPE build-time injection or `drvload` (runtime) as the driver *injection* mechanism Bamep itself owns. This is recorded as an architectural decision in `docs/decisions/0009-driver-provider-integration-boundary.md`. The SDIO case study (Finding 6) does not change this conclusion: it confirms the operator-side-tooling pattern is real and available today, and confirms — via SDIO's own documented live-fetch integration pattern — exactly why a Bamep-invoked online acquisition adapter was correctly rejected.
 
 ## Remaining uncertainty
 
