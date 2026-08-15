@@ -35,23 +35,62 @@ Every chunk, and the complete Artifact, requires a cryptographic digest (`docs/d
 
 Exact chunk size is implementation-time tuning (trade-off between manifest overhead, re-transfer granularity, and hashing cost), consistent with the Spike's own finding that chunk size "was not tuned or evaluated for a trade-off." This ADR fixes the mechanism (fixed-size chunking with a digest manifest), not the parameter.
 
-### 5. Resumability is bounded by source reproducibility — the consistency mechanism is not decided here
+### 5. Resumability is bounded by source reproducibility — resolved for M0/V1 via offline maintenance capture; live capture remains open
 
-Per the Spike's confirmed conclusion: chunking and per-chunk digests detect missing or changed chunks and allow selective retransmission, but do **not** by themselves make a changed source reproducible. Spike Experiment E demonstrated directly that a chunk regenerated from a since-mutated source correctly *fails* the original manifest — the artifact cannot be completed from that changed source, only correctly rejected.
+Per the Spike's confirmed conclusion: chunking and per-chunk digests detect missing or changed chunks and allow selective retransmission, but do **not** by themselves make a changed source reproducible. Spike Experiment E demonstrated directly that a chunk regenerated from a since-mutated source correctly *fails* the original manifest — the artifact cannot be completed from that changed source, only correctly rejected. A source-consistency mechanism is therefore required.
+
+**For M0/V1, the owner has resolved this: the normal Bamep backup workflow is not a live-Windows backup.** The accepted V1 flow is:
+
+1. the endpoint boots its installed Windows environment only when explicitly required;
+2. for maintenance/provisioning, the endpoint reboots through PXE;
+3. the Linux maintenance environment boots;
+4. the Bamep Agent starts and performs inventory;
+5. backup/capture, when requested, is performed while the installed Windows OS is **not running**;
+6. provisioning/restoration follows afterward.
+
+Volume/Image and Selective backup are, for M0/V1, **offline maintenance capture operations**. The consistency guarantee rests on the source being non-writable by the installed OS during capture — there is no concurrent writer to race against, because the OS that would write to it is not running:
+
+- **Volume/Image**: the installed Windows OS is not running; the source disk/volume is treated as a non-destructive read source; Bamep must not write to the source filesystem/device merely to perform the safety backup.
+- **Selective backup**: the installed Windows OS is not running; filesystems required for reading selected files are accessed read-only from the maintenance environment; Bamep must not mount the original source read-write merely to perform the backup.
+
+**This means snapshot/VSS/live-quiescing technology is not required for the normal M0/V1 backup workflow.** Live backup while the installed Windows OS is running is explicitly outside V1 scope and would require a future architecture/consistency decision this ADR does not make and does not design.
+
+**Offline capture does not prove application-level or filesystem-level semantic correctness.** A Windows filesystem may already be dirty, hibernated, or contain application data from an unclean shutdown *before* PXE boot. Offline capture establishes only that Bamep captured a stable source with no concurrent writer during the capture itself — it says nothing about whether the captured filesystem/application state was logically healthy at the moment capture began. This distinction is load-bearing for point 5a below (capture consistency is a narrower fact than "the backup is good").
 
 Therefore:
 
-- an artifact's manifest is valid only for chunks whose source remained stable for the duration of that artifact's capture;
-- if a chunk cannot be regenerated to match its original manifest entry (source changed, chunk lost with no stable source to regenerate from), the affected chunk — and, depending on the artifact's own consistency requirements, potentially the whole artifact — must be marked failed/incomplete, never silently completed or approximated;
-- **the concrete mechanism that keeps a source stable for a capture's duration (e.g., a snapshot, a quiesced source, or durable staging of already-produced chunks) is not decided by this ADR.** The Spike explicitly did not evaluate or choose one, and no M0 evidence yet exists to choose one responsibly. This is kept as an **explicit unresolved architectural requirement**: a real capture must preserve or reproduce the bytes belonging to that capture through a snapshot, a quiesced source, durable staging, or another evidence-backed mechanism — which mechanism is not chosen here. Issue #8 (`[Spike] Validate WinPE boot mechanism`) validates the WinPE boot mechanism only; it does not investigate or produce evidence for source consistency, snapshotting, quiescing, or durable capture staging, and this ADR does not depend on it for that question. Issue #8's eventual findings may later constrain which consistency mechanisms are practically available inside the real maintenance environment, but they do not themselves resolve this requirement. This unresolved mechanism does not invalidate the M0 transfer contract: the contract can require source reproducibility/materialization (points 2, 6) without selecting how production Volume/Image capture achieves it. Production Volume/Image capture cannot be safely implemented until an actual mechanism is chosen through further evidence and a future decision.
-- the Simulator (Issue #7) is not subject to this open dependency in the same way, since a simulated source can be made trivially stable for the duration of a simulated capture; this ADR's chunking/manifest/verification mechanism is fully implementable and testable against the Simulator without waiting for the real-endpoint consistency mechanism.
+- an artifact's manifest is valid only for chunks whose source remained stable for the duration of that artifact's capture — for M0/V1, "stable" is established by the offline maintenance-capture conditions above;
+- if a chunk cannot be regenerated to match its original manifest entry, the affected chunk — and, depending on the artifact's own consistency requirements, potentially the whole artifact — must be marked failed/incomplete, never silently completed or approximated;
+- the Simulator (Issue #7) can represent the offline-capture guarantee directly (a simulated source made stable for the duration of a simulated capture) without waiting for any additional real-endpoint mechanism, since M0/V1 does not require one beyond the offline workflow itself.
+
+### 5a. Capture/source consistency is a distinct durable fact, independent of `Verified`
+
+`Verified` (point 6) means cryptographic integrity only — stored bytes match the sealed Artifact/chunk identity. It must **not** be redefined to mean capture consistency. Capture consistency is a separate, independent durable fact on the Artifact:
+
+`capture_consistency: NotApplicable | NotEstablished | Established`
+
+- `NotApplicable`: the Artifact is not a capture of mutable client state for which source-writer consistency is a meaningful question (e.g., not every Artifact kind this Work Package's model could ever cover is a disk/file capture).
+- `NotEstablished`: the Artifact is a capture of mutable client state, and the maintenance workflow has not (yet, or ever) positively confirmed the offline/read-only source conditions in point 5 held for its duration.
+- `Established`: the maintenance workflow has **positively established** the relevant offline/read-only source conditions in point 5 for the duration of the capture (for M0/V1: the installed Windows OS was not running and the source was read-only for the capture's duration). This is an explicit, recorded confirmation, not a default — an Artifact does not become `Established` merely by existing.
+
+`capture_consistency == Established` means "the bytes belong to a stable capture under the declared capture conditions" — it does **not** mean "the filesystem/application state was logically healthy" (see point 5's semantic-correctness caveat).
+
+**A critical backup gating a destructive provisioning operation must satisfy both**, when that Artifact type requires capture consistency:
+
+- `Verified` (cryptographic integrity), **and**
+- `capture_consistency == Established`.
+
+A `Verified` backup whose `capture_consistency` is `NotEstablished` must **not** authorize the destructive step. This is an addition to, not a replacement of, the existing "only a `Verified` artifact may be consumed by a destructive operation" invariant in point 6.
 
 ### 6. Manifest construction, sealing, and the Artifact lifecycle
 
 An Artifact's chunk manifest is not necessarily complete when capture begins. Requiring the complete source to be pre-read solely to construct a manifest before any chunk can be transferred is **not** an M0 architectural requirement — that would be impractical for an Agent → Server capture of a large volume/image.
 
 - **Manifest construction** happens while the Artifact is `Incomplete`: as each logical chunk is produced, that chunk's identity — index, size, digest — becomes durable artifact metadata at that time. This per-chunk identity metadata is durable domain data (ADR-0007), not high-frequency progress/telemetry: it is written once per chunk as that chunk is produced, not repeatedly per byte or per retry.
-- **Manifest sealing**: once the producer has identified/produced every expected chunk for that capture (e.g., reached the end of the source range for Volume/Image, or finished enumerating and sizing the selected files for Selective), the manifest is **sealed** — `chunk_count` and the full set of chunk identities become fixed. A sealed manifest is immutable for that Artifact: no chunk identity may be added, removed, or have its recorded digest changed after sealing.
+- **`digest_algorithm` is fixed before construction begins**: the algorithm is fixed for the Artifact before the first chunk identity using it is committed — it cannot change partway through a capture.
+- **The expected `artifact_digest` is computed by the producer during production, incrementally** — while the logical Artifact is being produced, not by a second pre-read of the completed source after the fact. This is the *expected* value; it is not itself a verification act.
+- **Manifest sealing**: once the producer has identified/produced every expected chunk for that capture (e.g., reached the end of the source range for Volume/Image, or finished enumerating and sizing the selected files for Selective), the manifest is **sealed** — `digest_algorithm`, the expected `artifact_digest`, `chunk_count`, and the full set of chunk identities become fixed and immutable. No chunk identity may be added, removed, or have its recorded digest changed after sealing.
+- **Verification is independent of the expected value it checks**: the receiving/verifying side independently computes the digest over the stored, correctly ordered Artifact content and compares it against the sealed expected `artifact_digest` — it never *defines* or *rewrites* the value it is supposed to verify against. Verification that silently accepted its own computed value as ground truth would not be verification.
 - The Artifact may leave `Incomplete` for `PendingVerification` only once its manifest is **sealed** and every sealed chunk identity has a durably received, verified chunk matching it.
 - **Capture continuation vs. transfer resume/retransmission** are distinct: *capture continuation* is producing a chunk whose identity does not yet exist in the manifest (forward progress, extending the still-under-construction manifest); *transfer resume/retransmission* is when a chunk identity already exists (sealed or not) and the same bytes must be reproduced from the source, or retrieved from durable staging, to satisfy that existing identity — this is the scenario `docs/reference/transfer-resumability-spike.md` Experiments C, D, and E evaluated.
 - If a previously identified chunk cannot be reproduced to match its recorded digest, that digest is **never rewritten** to accept different bytes under the same chunk identity — doing so would silently redefine what the artifact is, the exact failure mode the Spike's evidence warns against (point 5). The affected chunk, and the Artifact per the states below, moves toward `Failed` instead.
@@ -62,7 +101,7 @@ Once manifest handling is understood this way, the Artifact has an explicit life
 
 - `Incomplete`: the manifest may still be under construction, or sealed but not yet fully chunk-verified; the artifact is not usable for any purpose, especially not as input to a destructive operation.
 - `PendingVerification`: the manifest is sealed, every expected chunk is present, and each has individually passed its chunk digest check, but the artifact's own full-content digest has not yet been confirmed.
-- `Verified`: the full-artifact digest is confirmed. Only a `Verified` artifact may be used as input to a destructive operation — this is the concrete mechanism satisfying the already-accepted invariant "critical backups must pass integrity verification before destructive provisioning proceeds" (`docs/discovery/architecture-redesign.md` "Security invariants").
+- `Verified`: the full-artifact digest is independently confirmed (see the manifest-sealing bullets above). Only a `Verified` artifact may be used as input to a destructive operation — this is the concrete mechanism satisfying the already-accepted invariant "critical backups must pass integrity verification before destructive provisioning proceeds" (`docs/discovery/architecture-redesign.md` "Security invariants"). Where the Artifact type requires it, the destructive operation must additionally check `capture_consistency == Established` (point 5a) — `Verified` alone is cryptographic integrity, not a claim about capture consistency.
 - `Failed`: verification failed, or a required chunk could not be completed (see point 5). A `Failed` artifact is never silently retried into a different state; recovery requires a new capture/transfer attempt, subject to the same Job/JobStep/Attempt retry policy already established (ADR-0006) for the JobStep that produced it.
 
 Completion (the `PendingVerification` → `Verified` transition, and the point at which the artifact becomes visible/usable at all) is atomic: no destructive step, or any other consumer, can observe a partially-written artifact as if it were complete. This is implemented at the storage layer (e.g., write to a temporary/incomplete location and atomically rename/commit on verified completion) — the exact mechanism is implementation-time, but the atomicity requirement itself is not optional.
@@ -88,9 +127,9 @@ Consistent with the already-accepted requirement that these are independently sp
 - **Volume/Image backup** uses the chunking model in points 2–6 directly: the source is inherently a linear byte range (a disk/volume), so fixed-size chunk boundaries are sufficient, matching the Spike's evidence.
 - **Selective backup** is file-granular: each selected file is its own artifact (or its own unit within a larger selective-backup artifact), following the same Artifact lifecycle (point 6); a large individual file may internally apply the same chunking mechanism. **This file-granularity design is a design implication drawn from the Spike's evidence, not an independently tested finding** — the Spike explicitly did not exercise per-file Selective backup behavior. Individual files can also change during capture and are subject to the same source-reproducibility boundary as point 5; file-level granularity does not exempt Selective backup from that requirement.
 
-### 9. Transfer session authentication is not designed here
+### 9. Transfer-session authentication remains unresolved, constrained but not solved by Issues #2/#3
 
-Every data-plane transfer must be bound to the Endpoint's already-authenticated Agent session (ADR-0004 identity/credential model; ADR-0005 control-plane handshake) — an unauthenticated or unbound data-plane transfer is not permitted. The concrete mechanism for establishing that binding (e.g., a short-lived transfer-scoped token issued over the control plane) is **not designed by this Work Package**, consistent with Issue #6's explicit out-of-scope boundary for transfer-session authentication (owned by the identity/control-protocol Work Packages, Issues #2/#3).
+Every data-plane transfer must be bound to the Endpoint's already-authenticated Agent session — an unauthenticated or unbound data-plane transfer is not permitted. Issues #2/#3 (ADR-0004, ADR-0005) define the accepted Endpoint identity/session and Agent trust contracts that any such binding must build on, but they do **not** already define or "own" the concrete authenticated binding of an HTTP data-plane transfer to that trusted session — that binding mechanism (e.g., a short-lived transfer-scoped token issued over the control plane, or another approach) is **not designed by this Work Package and remains unresolved**. It must be specified before a real authenticated data plane is implemented; it is constrained by the identity/credential model in Issues #2/#3, not already solved by those completed Work Packages. This ADR does not reopen Issues #2/#3 and does not create new tracked work to resolve this — it records the gap.
 
 ### 10. Correlation: `transfer_id`
 
@@ -100,28 +139,52 @@ Every data-plane transfer must be bound to the Endpoint's already-authenticated 
 
 HTTP connection/request identities are transient transport details and do not need a Domain identity in M0 — only the logical transfer operation (`transfer_id`) and the chunk identities within its manifest (point 6) are durable.
 
+### 11. Multi-disk endpoints and artifact source provenance
+
+An Endpoint is not modeled as having one implicit disk. Bamep must support endpoints with multiple physical disks and/or volumes — for example, an NVMe/SSD containing Windows plus an HDD containing user data, multiple data disks, or an old HDD used as a capture source while a new SATA SSD/NVMe becomes the provisioning target.
+
+An Artifact's **source provenance** identifies the concrete disk/volume/filesystem it was captured from, not merely "the Endpoint" that owns it. At the contract/Domain level, an Artifact must be able to correlate to the relevant source disk/volume/filesystem identity distinct from the Endpoint's own identity (ADR-0004). This ADR does not define the exact schema or field set for that provenance record — only that the correlation must be preservable.
+
+The load-bearing invariant this establishes: **Artifact source provenance is not the same fact as future destructive-target identity** — see point 12.
+
+### 12. Source identity vs. target-disk identity are independent (disk replacement)
+
+A valid Bamep workflow: an old HDD is backed up offline; the physical disk is replaced; a new SSD/NVMe is installed; inventory is revalidated; the new disk is provisioned; the retained user data is restored onto it.
+
+Therefore:
+
+- restoring/migrating retained data must **not** require the destination disk's fingerprint to equal the source Artifact's source-disk fingerprint (point 11);
+- **source identity** answers "where did these bytes come from?" (the Artifact's provenance, point 11);
+- **target-disk identity** answers "which currently installed disk is the destructive Job authorized to modify?" — this is the existing target disk identity/fingerprint revalidation already required by the destructive dispatch precondition composition (point 6; ADR-0004; ADR-0006 "Revalidation immediately before dispatch");
+- these are independent facts, and this ADR does not weaken the existing target-disk revalidation safety invariant (Issues #2/#4) in any way — the new target disk must still satisfy it, in full, immediately before execution, exactly as already required.
+
+A disk replacement may also legitimately change an Endpoint's observed hardware inventory (a new disk fingerprint appears where an old one was recorded). This ADR does **not** design the full planned-hardware-change authorization mechanism — that remains for the identity Work Package's own model (`docs/specifications/m0-endpoint-identity-lifecycle.md`) to eventually extend, not something this Work Package redesigns. It records, as a use case this Work Package's contract must not obstruct: an operator-authorized disk replacement is valid and must not be automatically interpreted as meaning a different Endpoint solely because the disk changed.
+
 ## Alternatives considered
 
 - **Plain HTTP Range-based byte-offset resume**: rejected as the general mechanism — dishonest exactly in the cases the Spike demonstrated (Experiments B, E). Not excluded as a possible future optimization layered *within* a chunk once a chunk itself is known-incomplete (e.g., resuming a partially-received chunk by byte offset within that one chunk, re-verified by the chunk's own digest on completion), but this ADR does not require that optimization and it is not decided here.
 - **A single continuous streaming HTTP body per artifact, no chunk manifest**: rejected — provides no safe resume points (Spike Experiment B) and no selective corruption detection (Spike Experiment C's advantage over B).
-- **Deciding the source-consistency/snapshot mechanism now**: rejected — no evidence exists yet; the Spike explicitly left this open. Issue #8 does not supply this evidence either (it validates the WinPE boot mechanism only). Inventing a mechanism now would be establishing architecture without evidence, which `docs/development/sdd.md` prohibits.
+- **Deciding a general-purpose (live-capable) source-consistency/snapshot mechanism now**: rejected — no evidence exists yet for a live-Windows scenario; the Spike explicitly left this open, and live backup is explicitly outside V1 scope (point 5). Inventing a mechanism now would be establishing architecture without evidence, which `docs/development/sdd.md` prohibits. What M0/V1 accepted instead is narrower: offline maintenance capture, which sidesteps the general problem by removing the concurrent writer rather than solving live-source consistency.
+- **Requiring VSS or another snapshot technology for M0/V1**: rejected — unnecessary given the accepted offline maintenance-capture workflow (point 5); the installed OS is not running, so there is no concurrent writer to snapshot against. Snapshot technology remains a candidate for a future live-backup decision, not chosen or ruled out here.
+- **Coupling restore/migration authorization to source-disk identity matching the destination disk**: rejected (point 12) — would make the disk-replacement use case impossible; source provenance and destructive-target identity are independent facts, and only the latter is a safety precondition on the destructive step.
 - **A generic `backup=true` flag instead of distinct Volume/Image and Selective strategies**: rejected — explicitly excluded by already-accepted Discovery direction.
 - **Reusing the Agent Protocol WebSocket connection for transfer bytes**: rejected — already-accepted control/data-plane separation (`docs/discovery/architecture-redesign.md`), and would couple large-transfer backpressure to the same connection carrying safety-relevant control messages (cancellation, status queries).
 
 ## Consequences
 
-- Issue #7 (Simulator) must simulate chunk-oriented transfer, including interrupted/corrupted-chunk scenarios and `Incomplete`/`PendingVerification`/`Verified`/`Failed` artifact transitions, at the M0 20–24 endpoint target.
-- Issue #5's persistence model (ADR-0007) must persist Artifact lifecycle transitions and chunk manifests as durable domain state, consistent with its durable/transient boundary (chunk *manifests* are durable; raw chunk transfer progress is the data-plane's own concern, not a domain-event-per-chunk).
-- Production Volume/Image capture cannot be safely implemented until the source-consistency mechanism (point 5) is resolved through further evidence — this is a concrete, tracked gap, not an oversight.
-- Any destructive JobStep consuming a backup artifact must verify the artifact is `Verified` as part of its own destructive-operation preconditions (ADR-0004, ADR-0006) — this ADR does not redefine those preconditions, only supplies the artifact-state fact they must check.
-- The transfer-session authentication mechanism (point 9) remains an open, tracked requirement on whichever future work extends the identity/control-protocol Work Packages to cover it.
+- Issue #7 (Simulator) must simulate chunk-oriented transfer, including interrupted/corrupted-chunk scenarios and `Incomplete`/`PendingVerification`/`Verified`/`Failed` artifact transitions, at the M0 20–24 endpoint target, plus offline-capture and `capture_consistency` scenarios (point 5a).
+- Issue #5's persistence model (ADR-0007) must persist Artifact lifecycle transitions, chunk manifests, `capture_consistency`, and source-provenance records as durable domain state, consistent with its durable/transient boundary (chunk *manifests* are durable; raw chunk transfer progress is the data-plane's own concern, not a domain-event-per-chunk).
+- Any destructive JobStep consuming a backup artifact must verify the artifact is `Verified`, and — where the Artifact type requires it — that `capture_consistency == Established`, as part of its own destructive-operation preconditions (ADR-0004, ADR-0006) — this ADR does not redefine those preconditions, only supplies the artifact-state facts they must check.
+- The transfer-session authentication mechanism (point 9) remains an open, unresolved requirement that must be specified before a real authenticated data plane is implemented — constrained by, not solved by, Issues #2/#3.
+- Live-Windows backup consistency remains an open architectural question for any future work that proposes it; this ADR does not evaluate or partially decide it.
+- The disk-replacement use case (point 12) must remain representable by any future planned-hardware-change authorization work in the identity Work Package's model — this ADR does not design that mechanism, only records the constraint it must satisfy.
 
 ## Related architecture
 
 - `docs/discovery/architecture-redesign.md` — "Data plane", "Storage", "Backup model", "Security invariants".
 - `docs/discovery/adr-triage.md` — candidates 8, 9, 10.
 - `docs/reference/transfer-resumability-spike.md` — empirical evidence this ADR applies.
-- ADR-0004 — Endpoint identity (destructive-operation preconditions an artifact's `Verified` state feeds; transfer-session authentication boundary).
+- ADR-0004 — Endpoint identity (destructive-operation preconditions an artifact's `Verified` state feeds; target-disk identity revalidation, point 12; transfer-session authentication boundary).
 - ADR-0005 — Agent control-plane protocol (control/data-plane separation; `ActionProgress`; `action_id`).
 - ADR-0006 — Job/JobStep/Attempt model (a transfer JobStep's Attempt; `attempt_id`).
 - ADR-0007 — Persistence backend and durable/transient boundary (`transfer_id` correlation; artifact durability).
@@ -133,7 +196,7 @@ HTTP connection/request identities are transient transport details and do not ne
 - Issue #6 — `[WP] Define data-plane and storage contracts`.
 - Issue #9 — `[Spike] Evaluate resumable volume/image transfer` (evidence this ADR applies).
 - Issue #8 — `[Spike] Validate WinPE boot mechanism` (validates the boot mechanism only; may later constrain which source-consistency mechanisms are practical in the real maintenance environment, but does not itself resolve that open requirement).
-- Issue #2 / ADR-0004, Issue #3 / ADR-0005 — transfer-session authentication boundary.
+- Issue #2 / ADR-0004, Issue #3 / ADR-0005 — constrain, but do not themselves resolve, transfer-session authentication (point 9); also own target-disk identity revalidation (point 12) and the Endpoint identity model any future disk-replacement authorization would extend.
 - Issue #4 / ADR-0006 — Attempt model a transfer belongs to.
 - Issue #5 / ADR-0007 — persistence of artifact/chunk-manifest durable state; `transfer_id` correlation.
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this contract's scenarios).

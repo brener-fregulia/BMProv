@@ -206,3 +206,30 @@ The following questions must not be silently decided during implementation:
 - transfer/snapshot resumability when the producer cannot support arbitrary restart;
 - Secure Boot or a hardened boot-chain strategy;
 - driver-provider integration.
+
+## Future: pre/post provisioning diagnostics (not M0 scope)
+
+Recorded during Issue #6 (data-plane and storage contracts) owner review as a future product use case, not as part of the M0 data-plane contract or any current Work Package.
+
+Bamep should eventually support an automated diagnostic/benchmark workflow running in the client's installed OS:
+
+- run diagnostics/performance measurements on the original Windows installation;
+- persist a pre-service baseline;
+- reboot into the maintenance/provisioning workflow;
+- perform backup/provisioning as required;
+- boot the newly installed/configured Windows environment;
+- run equivalent post-service diagnostics;
+- compare pre/post results;
+- produce an operator/customer-facing report.
+
+This should also allow aggregate historical comparison across Windows versions/builds, driver versions, Bamep provisioning-process changes, and hardware migrations such as HDD → SATA SSD/NVMe.
+
+This is a future workflow/use case only. It is not designed here: the Windows-side execution component, benchmark suite, reporting schema, and telemetry architecture are all undecided and out of scope for any current Work Package.
+
+The existing linear Job/JobStep model (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`) is expected to remain compatible with a future workflow conceptually resembling:
+
+```text
+PreflightDiagnostics → Backup → Provision → Configure → PostflightDiagnostics → Report
+```
+
+This is a forward-compatibility expectation, not a change to the accepted Job/JobStep model — ADR-0006 is not modified to add these future JobStep names, and no Work Package currently implements them.
