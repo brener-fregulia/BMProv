@@ -99,6 +99,8 @@ If revalidation fails: the Attempt is **not** created, `ActionDispatch` is **not
 
 States: `Dispatched`, `InProgress`, `AwaitingReconciliation`, `Succeeded`, `Failed`, `Cancelled`, `Rejected`, `Indeterminate`.
 
+`Dispatched` means the Server has durably committed the Attempt for dispatch and the `ActionDispatch` *may* have been transmitted — not that transmission is confirmed. A durable database transaction and the Agent WebSocket send cannot be atomic with each other, so the Server persists the Attempt as `Dispatched` (per `docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md`'s persist-before-send ordering) and only then attempts transmission, immediately, with no deliberate delay. No `ActionAck` has yet established accepted delivery at this point. On restart, a persisted `Dispatched` Attempt is an uncertain delivery outcome exactly like `InProgress`, and enters `AwaitingReconciliation` rather than being retransmitted blindly.
+
 Transitions:
 
 - `Dispatched` → `InProgress`: `ActionAck{outcome: Accepted}` received.
@@ -194,13 +196,14 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - ADR-0006 — Job/JobStep/Attempt state model and resource-lease scheduling (`Accepted`).
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (destructive-operation authorization preconditions).
 - ADR-0005 — Agent control-plane protocol and typed-action model (Agent-action states, retry mechanism, `StatusQuery`).
+- ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`; persist-before-send dispatch ordering `Dispatched` relies on).
 
 ## Related work
 
 - Issue #4 — `[WP] Define Job lifecycle and scheduling model`.
 - Issue #2 / ADR-0004 — Endpoint identity and destructive-operation preconditions.
 - Issue #3 / ADR-0005 — Agent Protocol v1.
-- Issue #5 — `[WP] Define persistence, observability, and domain-event model` (durability; domain events, including an `Indeterminate` notification event).
+- Issue #5 / ADR-0007 — persistence, observability, and domain-event model, including the persist-before-send dispatch ordering and an `Indeterminate` notification event.
 - Issue #6 — `[WP] Define data-plane and storage contracts` (transfer JobSteps).
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (reconciliation and cancellation scenarios).
 

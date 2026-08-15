@@ -74,9 +74,25 @@ When a durable domain transition requires a domain event and/or an audit record,
 **This is not event sourcing.** To avoid any ambiguity:
 
 - current durable domain state remains the source of truth for Bamep's own operation;
-- domain events are durable facts emitted from, and describing, already-committed transitions — they do not drive replay or reconstruction of state;
+- the domain event describing a transition is persisted in the **same atomic transaction** as that transition, and becomes durable/visible only if that transaction commits — it is not a second, post-commit database write; domain events do not drive replay or reconstruction of state;
 - Bamep does not reconstruct its domain state from the event stream in M0, and this ADR does not adopt event sourcing as an architecture;
 - external publication/delivery semantics for future integrations (e.g., how a future ERP might consume these events) are outside this Work Package and this ADR.
+
+### 7. Crash-safe dispatch persistence ordering (persist-before-send)
+
+A durable database transaction and the Agent WebSocket transmission of `ActionDispatch` cannot be atomic with each other — they are two different systems. Dispatching an Agent-executed Attempt (destructive or not) therefore follows a strict **persist-before-send** ordering:
+
+1. final dispatch preconditions pass (workflow/scheduler authorization, and for a destructive JobStep, the full destructive dispatch precondition composition — `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`);
+2. the Attempt and its `action_id` are created;
+3. the durable dispatch commitment (the Attempt record in its `Dispatched` state), any required domain event(s), and any required audit record(s) (a destructive dispatch always requires one, per `docs/specifications/m0-persistence-observability-and-domain-events.md` "Auditability") are staged together;
+4. that persistence transaction commits;
+5. only after that commit does the Server attempt to transmit `ActionDispatch` to the Agent.
+
+There is never a path where `ActionDispatch` can reach the Agent while no durable Attempt/correlation/audit record exists on the Server: the durable record always exists first, or the transmission never happens at all.
+
+A crash after step 3/4 but before or during step 5 is handled conservatively: the Server must never assume the Agent did not receive the action merely because it cannot confirm transmission completed or was even attempted. The persisted `Dispatched` Attempt is uncertain-by-construction until an `ActionAck` is received; on restart it is treated exactly like any other `Dispatched`/`InProgress` Attempt recovered without confirmation — it enters `AwaitingReconciliation` and is resolved only through the existing `StatusQuery`/`StatusReport` mechanism (ADR-0005, ADR-0006), never through blind retransmission.
+
+This ordering requires no distributed transaction, message broker, or general outbox infrastructure: the transmission attempt is the only step outside the database transaction, and the uncertainty it introduces is already fully covered by the existing `Dispatched` → `AwaitingReconciliation` reconciliation path (ADR-0006). No new infrastructure is introduced solely for this.
 
 ## Alternatives considered
 
@@ -85,7 +101,9 @@ When a durable domain transition requires a domain event and/or an audit record,
 - **Dual SQLite/PostgreSQL support in M0**: rejected — explicit owner instruction; defers real cost to validate a hypothetical need instead of building the adapter boundary that defers it properly.
 - **Treating high-frequency telemetry, progress, and presence as durable per-message/per-sample writes**: rejected — would make write volume scale with message count rather than domain-event count, undermining the durable write model this ADR relies on, regardless of which backend were chosen.
 - **Constraining the domain model to a lowest-common-denominator SQL subset now**: rejected per explicit owner instruction — the repository port, not domain-model compromise, is the correct location for future backend portability.
-- **Event sourcing (deriving durable domain state from the event stream)**: rejected for M0 — current durable domain state remains the source of truth; domain events are facts emitted from committed transitions, not a replay log Bamep reconstructs state from. Adopting event sourcing would be a significantly larger architectural commitment than this Work Package's scope justifies.
+- **Event sourcing (deriving durable domain state from the event stream)**: rejected for M0 — current durable domain state remains the source of truth; domain events are facts persisted in the same transaction as, and describing, committed transitions, not a replay log Bamep reconstructs state from. Adopting event sourcing would be a significantly larger architectural commitment than this Work Package's scope justifies.
+- **Transmit-then-persist dispatch ordering**: rejected — would create a real path where `ActionDispatch` reaches the Agent while no durable Attempt/correlation/audit record exists on the Server, violating the crash-safety invariant this ADR requires. Persist-before-send is the only ordering that keeps that path impossible.
+- **External outbox pattern / message broker for dispatch delivery**: rejected as unnecessary machinery for M0 — the existing `Dispatched` → `AwaitingReconciliation` reconciliation path (ADR-0006) already fully covers the uncertainty window between commit and confirmed transmission; a broker would duplicate that guarantee at added operational cost.
 
 ## Consequences
 
@@ -94,6 +112,8 @@ When a durable domain transition requires a domain event and/or an audit record,
 - `ActionProgress` (ADR-0005) must not be wired to a durable-database insert per message in any future implementation; only `ActionResult` (or an explicitly defined checkpoint policy, not decided here) is durably persisted.
 - The persistence Adapter must be built behind the existing `repositories` Port (`docs/specifications/m0-stack-and-boundaries-baseline.md`); Domain/Application code must not reference SQLite directly.
 - Any implementation that writes domain state alongside a required domain event or audit record must do so within one atomic transaction; a partial-commit path (state without event/audit, or the reverse) is a defect, not an acceptable interim state.
+- Any implementation that dispatches an Agent-executed Attempt must follow the persist-before-send ordering in "Crash-safe dispatch persistence ordering"; sending `ActionDispatch` before the durable commit is a defect, not an optimization.
+- `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`'s `Dispatched` state semantics are narrowly clarified to match this ordering (durably committed for dispatch; transmission may or may not have completed) without changing its retry or reconciliation policy.
 - Issue #7 (Simulator) **must** exercise representative persistence load at the M0 20–24 concurrent-endpoint target before the M0 architecture is considered validated — this ADR's SQLite acceptance is conditional on that evidence, not a substitute for it (see `docs/specifications/m0-persistence-observability-and-domain-events.md` "Validation expectations").
 - If that validation shows unacceptable write contention, latency, or backpressure at the M0 target, this ADR must be revisited — this is a first-class revisit trigger, alongside the concrete triggers listed in "Repository port/adapter boundary" (higher concurrent-write pressure, remote operation, multiple Server instances, HA, multi-site). A general sense that Bamep "might get bigger" is not by itself a trigger.
 

@@ -71,7 +71,9 @@ This is the minimum correlation set required by `docs/discovery/architecture-red
 
 Per ADR-0007: when a durable domain transition requires a domain event and/or an audit record, the domain-state change, its event, and any required audit record are persisted atomically in the same persistence transaction. A crash must never leave committed state without its required event/audit record, or a committed event/audit record for a transition that did not itself commit.
 
-**This is not event sourcing.** Current durable domain state remains the source of truth; domain events are durable facts emitted from already-committed transitions, not a log Bamep replays to reconstruct state. External publication/delivery semantics for future integrations are outside this Work Package.
+For an Agent-executed Attempt specifically, this transaction commits **before** the Server attempts to transmit `ActionDispatch` to the Agent — a database transaction and a WebSocket send cannot be atomic with each other, so persistence always comes first. ADR-0007 "Crash-safe dispatch persistence ordering" defines the exact ordering and how a crash around the send boundary is handled (via the existing `Dispatched` → `AwaitingReconciliation` path, `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`); this Specification does not duplicate that detail.
+
+**This is not event sourcing.** Current durable domain state remains the source of truth. The domain event describing a transition is persisted in the **same atomic transaction** as that transition — it becomes durable and visible only if that transaction commits; it is not a second, post-commit database write, and there is no window where the transition is committed but its event is not (or vice versa). Domain events are not a log Bamep replays to reconstruct state. External publication/delivery semantics for future integrations are outside this Work Package.
 
 ## Inventory persistence boundary
 

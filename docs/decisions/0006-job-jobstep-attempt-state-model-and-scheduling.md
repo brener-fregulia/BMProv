@@ -89,7 +89,7 @@ If that revalidation fails, the Attempt is **not** created and `ActionDispatch` 
 
 `Dispatched → InProgress → {Succeeded | Failed | Cancelled | Rejected}`, with `AwaitingReconciliation` reachable from `Dispatched` or `InProgress`, and `Indeterminate` reachable only from `AwaitingReconciliation`.
 
-- `Dispatched`: `ActionDispatch` sent; awaiting `ActionAck`.
+- `Dispatched`: the Server has durably committed the Attempt for dispatch (per ADR-0007's persist-before-send ordering) and the `ActionDispatch` may have been transmitted; no `ActionAck` has yet established accepted delivery. Under normal operation, the Server attempts transmission immediately after the durable commit — `Dispatched` does not imply a deliberate delay before sending. On Server restart, any persisted `Dispatched` Attempt is treated as an uncertain delivery outcome and enters `AwaitingReconciliation`, exactly as already required for `InProgress`. A persisted `Dispatched` state must never cause blind retransmission of a destructive action.
 - `InProgress`: the Agent has accepted the action and no terminal outcome is yet known. Reached from `ActionAck{outcome: Accepted}`, and equally from `StatusReport{known_state: Accepted}` or `StatusReport{known_state: Running}` during reconciliation — both Agent-side `Accepted` and `Running` map to this one Attempt state. This Specification-level model does not duplicate the Agent Protocol's finer-grained Accepted/Running distinction; the Server does not need it at this granularity.
 - `Rejected`: `ActionAck{outcome: Rejected}` received — the Attempt never executed. Kept distinct from `Failed`, consistent with ADR-0005.
 - `Succeeded` / `Failed` / `Cancelled`: terminal, populated from `ActionResult` or `CancelAck{outcome: Cancelled}`.
@@ -159,6 +159,7 @@ This is distinct from, and prior to, the per-Attempt "Workflow/scheduler authori
 - `docs/discovery/adr-triage.md` — candidates 7, 11.
 - ADR-0004 — Endpoint identity (destructive-operation authorization preconditions; this ADR defines precondition 3, "authorized Job/action").
 - ADR-0005 — Agent control-plane protocol (Agent-action state vocabulary consumed by Attempt; retry mechanism this ADR's policy governs; `StatusQuery`/`StatusReport` this ADR's reconciliation procedure uses).
+- ADR-0007 — Persistence backend and durable/transient boundary (defines the persist-before-send ordering that this ADR's `Dispatched` state's durable-commit semantics rely on).
 - `docs/specifications/m0-job-lifecycle-and-scheduling.md` — detailed state tables and validation expectations.
 
 ## Related work
@@ -166,6 +167,7 @@ This is distinct from, and prior to, the per-Attempt "Workflow/scheduler authori
 - Issue #4 — `[WP] Define Job lifecycle and scheduling model`.
 - Issue #2 / ADR-0004 — Endpoint identity and destructive-operation preconditions.
 - Issue #3 / ADR-0005 — Agent Protocol v1 (action states, retry mechanism, `StatusQuery`).
+- Issue #5 / ADR-0007 — persist-before-send dispatch ordering this ADR's `Dispatched` semantics rely on.
 - Issue #5 — `[WP] Define persistence, observability, and domain-event model` (durability of Job/JobStep/Attempt; domain events).
 - Issue #6 — `[WP] Define data-plane and storage contracts` (transfer JobSteps fit this model).
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate reconciliation and cancellation scenarios).
