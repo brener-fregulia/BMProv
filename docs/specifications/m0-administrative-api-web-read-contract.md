@@ -14,6 +14,14 @@ The vertical slice (`docs/specifications/m0-architecture-baseline.md` "First imp
 
 This Specification defines only the contract needed for that final observation step. It does not implement Server or Web, and does not design a complete Administrative API for all future Bamep functionality.
 
+**Three distinct communication responsibilities.** Bamep has three separate communication boundaries, and this Work Package touches only the third:
+
+1. **Agent Control Plane** — Agent ↔ Server, Agent Protocol v1, WSS; already `Accepted` (ADR-0005, Issue #3).
+2. **Data Plane** — Agent ↔ Server, large artifact transfer, HTTP chunk-oriented; already `Accepted` (ADR-0008, Issue #6).
+3. **Administrative / Management Plane** — Bamep Web ↔ Bamep Server; this is the boundary Issue #12 defines.
+
+This Specification does not change, reinterpret, or modify the Agent control-plane decision. Administrative API v1 is a separate contract for a separate boundary; it must never be called or treated as "the Agent control plane."
+
 ## Goal
 
 Define the minimum read/query surface, resource representations, versioning boundary, and correlation identifiers Web needs to observe Endpoint, Job, progress/reconciliation, and terminal result state produced by the first vertical slice — without Web reading the Server's internal database, and without inventing parallel Web-specific lifecycle vocabulary alongside the Domain states already defined by the approved M0 Specifications.
@@ -25,7 +33,8 @@ Define the minimum read/query surface, resource representations, versioning boun
 - versioning boundary and wire-format conventions for this contract;
 - stable identifiers/correlation exposed across Server and Web;
 - representation of absent, pending, failed, terminal, and reconciliation states;
-- the delivery model this minimum contract requires (query/poll, not push);
+- the request/response snapshot-read delivery model this contract defines, and its explicit boundary from any future update-notification mechanism;
+- the minimum normative HTTP read operations (routing, success/not-found semantics) needed by the first vertical slice;
 - contract-test expectations for the Server ↔ Web boundary.
 
 ## Out of scope
@@ -39,10 +48,10 @@ Per Issue #12's approved scope, this Specification does **not** define or decide
 - multi-user support;
 - RBAC/permissions;
 - user/account lifecycle;
-- destructive commands initiated from Web;
+- Job creation, cancellation, or enrollment-approval endpoints, destructive commands, or any other generic write API initiated from Web;
 - workflow creation/editing UI;
-- a final browser real-time event-delivery mechanism (WebSocket/SSE) — this minimum read contract does not demonstrate a requirement for one (see "Delivery model" below);
-- Agent Protocol changes;
+- choosing a final browser real-time event-delivery/notification mechanism (SSE, WebSocket, long polling, or otherwise) — none is chosen by this Work Package (see "Delivery model" below);
+- Agent Protocol changes, and any reinterpretation of the Agent control plane already `Accepted` in ADR-0005;
 - data-plane transfer mechanics;
 - persistence/database schema;
 - external ERP/integration API;
@@ -62,11 +71,23 @@ Restates Issue #12's approved constraints, consistent with `docs/specifications/
 
 ## Delivery model
 
-This minimum contract is **request/response, query-oriented**: Web requests current state; the Server does not push updates to Web. Web observes progress and terminal outcome by issuing queries (polling), not by subscribing to a push channel.
+Administrative API v1 defines a **request/response read surface for obtaining the authoritative current snapshot of Server-owned state**. That is the contract: given a resource identifier, a read returns the current authoritative state for it.
 
-This directly satisfies Issue #12's exclusion of "a final browser event-delivery mechanism unless the minimum slice contract genuinely requires an architectural decision" and "WebSocket/SSE simply for real-time convenience without a demonstrated requirement": the first vertical slice's final step ("Web reflects result") does not, by itself, demonstrate a requirement for push delivery — a query issued after the Job reaches a terminal state is sufficient to satisfy it. This is a scoping decision for this minimum contract only; it does not decide the eventual production Administrative API's real-time delivery mechanism, which `docs/discovery/architecture-redesign.md` ("Control plane") already leaves open among REST + polling, REST + long polling, WebSocket, and SSE — that broader decision remains for a future Work Package if a concrete requirement emerges.
+**Polling is not part of the architectural contract.** It is a permitted implementation strategy: the first vertical-slice implementation may periodically query these resources to observe change over time. Administrative API v1 itself does not require, assume, or standardize any particular query cadence or change-detection strategy — it only defines what a single request/response read returns. Explicitly:
 
-This contract is also **snapshot-oriented, not event-stream-oriented**: Web queries current durable domain state; it does not consume the domain-event stream defined by `docs/specifications/m0-persistence-observability-and-domain-events.md` directly. That domain-event envelope remains available for other future integrations (e.g., a future ERP, per `docs/discovery/architecture-redesign.md` "Open-source and commercial boundary"); this Specification does not redefine or narrow it, and does not require Web to be one of its consumers.
+- Administrative API v1 exposes authoritative current-state snapshots through HTTP request/response reads.
+- The first vertical-slice implementation may periodically query those resources.
+- No push mechanism is required to satisfy M0.
+- The eventual mechanism by which Web learns that state changed remains undecided.
+- SSE, WebSocket, long polling, or another notification mechanism may be evaluated later if a concrete product requirement justifies one — **none is chosen by this Work Package**. This is distinct from, and must not be confused with or presented as changing, the Agent Protocol v1 WSS control plane already `Accepted` in ADR-0005 (Issue #3) — that is the separate Agent↔Server control plane (see "Three distinct communication responsibilities" above).
+
+**Snapshot reads remain authoritative even if a push/change-notification mechanism is introduced later.** Conceptually, any future Web client behavior is expected to follow:
+
+Web opens or reconnects → reads current authoritative resource state (Administrative API v1) → may later receive change notifications (mechanism not designed here) → re-reads/reconciles against authoritative Server state as necessary.
+
+Web must never be required to reconstruct authoritative Job/Endpoint state solely by replaying domain events or browser notifications — a future push mechanism, if introduced, supplements this read surface; it does not replace it as the source of truth. This Specification does not design that future push protocol.
+
+This contract is also **snapshot-oriented, not event-stream-oriented**: a read returns current durable domain state; it does not consume the domain-event stream defined by `docs/specifications/m0-persistence-observability-and-domain-events.md` directly. That domain-event envelope remains available for other future integrations (e.g., a future ERP, per `docs/discovery/architecture-redesign.md` "Open-source and commercial boundary"); this Specification does not redefine or narrow it, and does not require Web to be one of its consumers.
 
 ## Wire format and versioning baseline
 
@@ -74,11 +95,23 @@ Administrative API v1 reuses, rather than reinvents, the cross-language conventi
 
 - UTF-8 JSON request/response bodies;
 - timestamps as RFC 3339 / ISO 8601 UTC strings, never epoch integers;
-- identifiers (`endpoint_id`, `job_id`, `jobstep_id`, `attempt_id`, `action_id`, `transfer_id`) as UUID v4, lowercase hyphenated string — the same identifiers already defined by `docs/specifications/m0-persistence-observability-and-domain-events.md` "Correlation model", not a new identifier scheme;
+- Domain identifiers exposed to Web (`endpoint_id`, `job_id`, `jobstep_id`, `attempt_id`, `transfer_id`, `artifact_id`, inventory revision identifiers, etc.) are **stable opaque JSON strings** — the same identifiers already defined by `docs/specifications/m0-persistence-observability-and-domain-events.md` "Correlation model", not a new identifier scheme. Web must not infer semantic meaning from their textual format. This Work Package does not choose the generation format for any of them; the authoritative contract/Specification that owns a given identifier may define a more specific format independently of this one. `action_id`, when present, continues to follow Agent Protocol v1's own format (`docs/specifications/m0-agent-protocol-contract.md` "Wire encoding" — UUID v4, lowercase hyphenated string), because that identifier is owned by that contract, not by this one;
 - an absent optional field is omitted from the JSON object entirely, never sent as `null`;
 - a client (Web) ignores fields it does not recognize within an otherwise known response shape, to allow forward-compatible minor additions.
 
-The contract is versioned as **Administrative API v1**, independently of Agent Protocol v1 and of Server/Web SemVer (`docs/specifications/m0-stack-and-boundaries-baseline.md` "Packaging and versioning baseline": "contracts versioned separately"). Exact transport-level routing (URL paths, HTTP methods, status-code conventions) is implementation-time detail, not decided here — this Specification defines the resources, their representations, and required semantics; not the literal request routing.
+The contract is versioned as **Administrative API v1**, independently of Agent Protocol v1 and of Server/Web SemVer (`docs/specifications/m0-stack-and-boundaries-baseline.md` "Packaging and versioning baseline": "contracts versioned separately"). The `/api/admin/v1/` routing prefix (see "Minimum HTTP read operations" below) is this contract's explicit version boundary.
+
+## Minimum HTTP read operations
+
+Issue #12 exists specifically to define an independently implementable Server ↔ Web contract, so — unlike broader REST conventions — the minimum routing and success/not-found semantics needed by the first vertical slice are normative, not implementation-time detail:
+
+- `GET /api/admin/v1/endpoints/{endpoint_id}` → the Endpoint representation defined below.
+- `GET /api/admin/v1/jobs/{job_id}` → the Job representation defined below, including its ordered JobStep summaries, the relevant Attempt summary, progress snapshot, and Transfer/Artifact summary needed by the vertical slice. Separate JobStep/Attempt endpoints are not defined — no concrete need to query them independently of their parent Job has been identified for this minimum slice.
+- Existing resource → HTTP `200` with the documented JSON representation.
+- Nonexistent resource identifier → HTTP `404`.
+- Response bodies are JSON, per the wire-format conventions above.
+
+This Specification does not design list endpoints, pagination, filtering, caching/ETag behavior, a broad error catalog, CRUD semantics, or future-complete REST conventions — those remain out of scope for this minimum contract and are added only when a concrete need is identified.
 
 ## Read/query surface
 
@@ -88,9 +121,10 @@ The minimum resources Web must be able to query, each scoped by its already-defi
 
 - `endpoint_id`;
 - identity-lifecycle state: `PendingEnrollment` | `Enrolled` | `Retired` (`m0-endpoint-identity-lifecycle.md` "Endpoint identity lifecycle");
-- credential/session state, summarized for operator display: whether a session is currently active (derived from `CredentialActive` vs. `NoActiveCredential`/`CredentialExpired`/`CredentialRevoked`); exposing the full credential dimension is not required beyond what an operator needs to understand current connectivity;
+- credential/session state: `NoActiveCredential` | `CredentialActive` | `CredentialExpired` | `CredentialRevoked` (`m0-endpoint-identity-lifecycle.md` "Credential/session lifecycle") — exposed directly, reusing the accepted vocabulary, not summarized into a derived connectivity flag;
+- current Agent presence, represented **separately** as a simple runtime observation (e.g. `Connected` | `Disconnected`): transient/runtime state, distinct from and never derived from the credential dimension above. An Endpoint may hold a valid (`CredentialActive`) credential while currently disconnected — presence and credential validity are different facts (`m0-endpoint-identity-lifecycle.md` "State dimensions") and this representation must not conflate them;
 - hardware-confidence state: `Consistent` | `LoweredConfidence` | `Conflict` (`m0-endpoint-identity-lifecycle.md` "Hardware/identity-confidence state") — required so Web can surface a `LoweredConfidence`/`Conflict` condition for operator review, consistent with that Specification's own requirement that these conditions "surface for operator awareness and review";
-- current inventory revision reference and an inventory summary sufficient for the operator-facing result; the exact inventory summary field set is not decided here — it depends on the inventory content model, which is implementation-time detail not owned by this Specification.
+- current inventory revision identifier/reference, and whether a current inventory revision exists for the Endpoint (i.e., whether at least one durable inventory revision has been recorded, per `m0-persistence-observability-and-domain-events.md` "Inventory persistence boundary"). No open-ended inventory-summary object is defined by this minimum contract — its structure would only be decidable during implementation; a richer inventory read surface is a future extension once the inventory content model itself is specified by a future Work Package, not invented here.
 
 ### Job
 
@@ -132,8 +166,8 @@ Full chunk-manifest detail (per-chunk digests, chunk indices) is not part of thi
 
 Per Issue #12's instruction, the following are surfaced as explicit findings rather than silently decided or silently expanded into this Work Package's scope:
 
-1. **Authentication.** This Specification defines a read contract with no access-control mechanism. Even a read-only API exposing Endpoint/Job/inventory state has a genuine access-control question before any real deployment — this Specification does not answer it, consistent with Issue #12's exclusion of "administrative login/authentication mechanism." It remains owner-relevant and is not solved by any current M0 Work Package (also noted as unresolved in `m0-persistence-observability-and-domain-events.md` "Open questions" for audit-record attribution).
-2. **Command/write semantics.** Nothing in this Specification allows Web to initiate a Job, cancel a Job, approve enrollment, or issue any other write. If the first vertical slice's actual implementation finds it cannot demonstrate "Web reflects result" through reads alone (for example, if triggering the simulated scenario must itself go through this contract), that would require a new, separately authorized decision — it is not assumed or designed here.
+1. **Authentication.** This Specification defines a read contract with no access-control mechanism. Even a read-only API exposing Endpoint/Job/inventory state has a genuine access-control question before any real deployment — this Specification does not answer it, consistent with Issue #12's exclusion of "administrative login/authentication mechanism." Issue #12 defines the Server ↔ Web read contract, not production access control: a development/simulated vertical-slice implementation may exercise this contract without establishing the final production administrative authentication model, but such an implementation must not be represented as production-secure. Real production exposure requires an explicit authentication/authorization decision before deployment. This remains owner-relevant and is not solved by any current M0 Work Package (also noted as unresolved in `m0-persistence-observability-and-domain-events.md` "Open questions" for audit-record attribution); no new Work Package or GitHub Issue is created by this task to solve it.
+2. **Command/write semantics.** Issue #12 owns only the observation side required by "Web reflects result." Nothing in this Specification allows Web to initiate a Job, cancel a Job, approve enrollment, issue any other destructive command, or use a generic write API. The simulated vertical slice may be initiated by the Simulator/test harness or another internal implementation mechanism instead. If the first vertical slice's actual implementation finds it cannot demonstrate "Web reflects result" through reads alone, that would require a new, separately authorized decision — it is not assumed or designed here.
 
 Neither finding blocks approval of this Specification: both are genuinely out of Issue #12's scope, not gaps in this contract's own read-only completeness.
 
@@ -145,7 +179,8 @@ Neither finding blocks approval of this Specification: both are genuinely out of
 - Externally exposed identifiers and state representations are defined sufficiently for independent Server/Web implementation — satisfied by reusing the already-defined Domain vocabulary and the Agent Protocol v1 wire conventions.
 - Contract-test expectations are defined (see "Validation expectations").
 - No authentication, multi-user, command/write, or broad future API design has been silently introduced — see "Unresolved findings surfaced for owner review."
-- No architectural decision required by "Web reflects result" remains hidden in the future implementation Work Package — the delivery-model scoping decision is made explicit above, not assumed.
+- No architectural decision required by "Web reflects result" remains hidden in the future implementation Work Package — the delivery-model boundary (snapshot reads are the contract; polling and any future push mechanism are strategy, not architecture) is made explicit above, not assumed.
+- The Agent control plane (ADR-0005) is not modified, reinterpreted, or conflated with this Administrative/Management plane — see "Three distinct communication responsibilities."
 
 ## Validation expectations
 
@@ -153,11 +188,12 @@ Automated: none produced directly by this Work Package — it is decision/specif
 
 Expected contract-test coverage once implemented, per `docs/development/testing.md` "Contract tests":
 
-- serialization of every resource representation defined above, including the wire-format conventions (timestamp format, identifier format, omitted-vs-null optional fields);
+- serialization of every resource representation defined above, including the wire-format conventions (timestamp format, opaque identifier strings, omitted-vs-null optional fields);
 - correct representation of each Domain state value listed above, with no state silently collapsed or substituted (in particular `AwaitingReconciliation`, `Indeterminate`, and each `failure_reason` value);
+- Agent presence represented independently of credential state, including the case of a `CredentialActive` Endpoint currently `Disconnected`;
 - absence of a progress snapshot represented as an omitted field, not a default value;
-- a nonexistent resource identifier represented as absent, not as an empty/default-valued resource;
-- version-mismatch handling for an incompatible Administrative API version request (exact behavior implementation-time, but the expectation that a mismatch is detected explicitly, not silently ignored, is part of this contract).
+- `GET /api/admin/v1/endpoints/{endpoint_id}` and `GET /api/admin/v1/jobs/{job_id}` returning HTTP `200` with the documented representation for an existing resource, and HTTP `404` for a nonexistent resource identifier;
+- the Job response correctly nesting JobStep, Attempt, progress, and Transfer/Artifact summaries as defined above, without exposing separate JobStep/Attempt endpoints.
 
 Manual: owner approval of this Specification.
 
@@ -180,10 +216,12 @@ No new ADR is introduced by this Work Package, per Issue #12's explicit instruct
 
 None of the following are blocking for owner approval of Issue #12 — each is explicitly deferred implementation-time detail or a separately surfaced finding, not an unresolved architectural fork of this Specification's own scope.
 
-1. Exact inventory-summary field set exposed to Web — depends on the inventory content model, implementation-time.
-2. Exact transport-level routing (URL paths, HTTP methods, status-code conventions) — implementation-time.
-3. Authentication mechanism — surfaced as an unresolved finding above, not decided here, not owned by any current M0 Work Package.
-4. Whether command/write semantics will eventually be required for the vertical slice — surfaced as an unresolved finding above; not assumed.
-5. The eventual production Administrative API's real-time delivery mechanism (if any) — `docs/discovery/architecture-redesign.md` leaves this open among several candidates; this Specification's poll/query-only scoping applies to this minimum contract only.
+1. A richer inventory read surface — deferred until the inventory content model itself is specified by a future Work Package; not invented here.
+2. HTTP conventions beyond the minimum defined above (headers, additional status codes, a broader error catalog) — implementation-time.
+3. Generation format for each Domain identifier (`endpoint_id`, `job_id`, `jobstep_id`, `attempt_id`, `transfer_id`, `artifact_id`, inventory revision identifiers) — not chosen here; owned independently by whichever Specification defines each identifier.
+4. The mechanism by which the Server determines Agent presence (`Connected`/`Disconnected`) — implementation-time, likely related to the Agent Protocol session/heartbeat, but not designed by this Specification.
+5. Authentication mechanism — surfaced as an unresolved finding above, not decided here, not owned by any current M0 Work Package.
+6. Whether command/write semantics will eventually be required for the vertical slice — surfaced as an unresolved finding above; not assumed.
+7. The eventual production Administrative API's update-notification mechanism (if any) — `docs/discovery/architecture-redesign.md` leaves this open among several candidates for the Web/administrative boundary; this Specification's snapshot-read-only scoping applies to this minimum contract only and does not decide it.
 
 Status: Proposed - awaiting owner approval.
