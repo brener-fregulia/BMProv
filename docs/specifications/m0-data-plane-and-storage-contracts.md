@@ -1,6 +1,6 @@
 # M0 — Data-Plane and Storage Contracts
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
@@ -80,6 +80,10 @@ Transitions:
 - `Incomplete` → `Failed`: a required chunk cannot be (re)produced to match its manifest digest (source-reproducibility boundary above), or the capture is otherwise abandoned/cancelled per the owning JobStep's cancellation (ADR-0006).
 - `Verified` and `Failed` are terminal for that artifact. A `Failed` artifact is not retried in place; a new capture/transfer attempt (a new Attempt on the owning JobStep, per ADR-0006's retry policy) produces a new artifact.
 
+**An Artifact is an atomic integrity/completeness unit.** Failure of any single required chunk — chunk-level digest mismatch, or a chunk that cannot be reproduced/verified per "Source reproducibility" above — means that Artifact as a whole cannot become `Verified`; it becomes `Failed`. There is no partial success within one Artifact: a `Failed` Artifact is never treated as partially usable, and no subset of its chunks is ever exposed to a consumer independent of the whole. This is definitional for M0, not an open question: the manifest sealing and lifecycle rules above already establish it, and this paragraph only makes it explicit.
+
+If a future Selective-backup workflow is composed of multiple independent Artifacts (for example, one Artifact per selected file), those Artifacts may succeed or fail independently of one another — that is independent-Artifact behavior, not partial recovery of any single Artifact, and whether a Job/workflow may accept such partial success across multiple Artifacts is a future workflow-policy question. This Specification does not redesign Selective backup or ADR-0006 to answer it.
+
 Only a `Verified` artifact may be consumed by a destructive operation, and — where the Artifact type requires capture consistency — only one whose `capture_consistency` is `Established` (see "Capture/source-consistency fact"). A destructive JobStep's precondition revalidation (ADR-0006 "Revalidation immediately before dispatch") must include checking both facts for any artifact it depends on, at dispatch time, not merely when the JobStep was first evaluated.
 
 ## Artifact source provenance and multi-disk endpoints
@@ -157,7 +161,7 @@ Per `docs/development/testing.md` "Simulator": chunked transfer at the M0 20–2
 
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
-Manual: owner approval of this Specification.
+Manual: owner approval of this Specification — confirmed (see Status). Remaining open items (chunk size, `digest_algorithm` selection, live-Windows backup consistency, the concrete mechanism establishing `capture_consistency = Established`, the authenticated data-plane transfer binding, disk-replacement authorization, and Artifact source-provenance schema) are explicitly non-blocking implementation/future-work detail, not unresolved architecture.
 
 ## Related ADRs
 
@@ -185,6 +189,7 @@ Manual: owner approval of this Specification.
 5. Transfer-session authentication mechanism — unresolved; constrained by, not solved by, Issues #2/#3.
 6. Planned-hardware-change (disk-replacement) authorization mechanism — not designed here, remains for the identity Work Package's model.
 7. Exact schema/field set for Artifact source-provenance records — not decided here.
-8. Whether a chunk-level failure always fails the whole artifact, or whether partial-artifact recovery is ever meaningful — not evidenced, not decided here.
 
-Status: Proposed - awaiting owner approval.
+None of the above are blocking for owner approval of Issue #6 — each is explicitly deferred implementation/future-work detail, not an unresolved architectural fork.
+
+Status: Approved.
