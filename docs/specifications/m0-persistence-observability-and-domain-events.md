@@ -15,6 +15,8 @@ Restates and applies ADR-0007's boundary (see that ADR for full reasoning):
 
 Any future Work Package or implementation that persists new state must classify it against this boundary explicitly rather than defaulting to "durable."
 
+**This boundary is an architectural expectation, not yet an empirically validated result** (ADR-0007). It bounds write volume to the number of domain-state transitions rather than message/sample count, but it does not make database load independent of endpoint count — more concurrent endpoints still produce more transitions. Whether the resulting load is comfortable for SQLite at the M0 20–24 endpoint target is for Issue #7 to measure (see "Validation expectations").
+
 ## Domain-event model
 
 Domain events are durable, coarse-grained records of a completed state transition, useful to the product itself and to future integrations (`docs/discovery/architecture-redesign.md` "Observability"; the open-source/commercial boundary in that document requires future ERP integration through domain events, never through Bamep's internal database directly).
@@ -37,6 +39,19 @@ Domain events are durable, coarse-grained records of a completed state transitio
 
 Each event is emitted once per underlying transition — never re-derived from, or duplicating, high-frequency observation data.
 
+### Domain-event envelope
+
+Every durable domain event carries at least:
+
+- `event_id` — unique and immutable once assigned;
+- `event_type` — the event name (e.g. `JobSucceeded`);
+- `event_version` — versions the schema of that specific `event_type`, independent of other event types' versions;
+- `occurred_at` — when the underlying transition committed;
+- `endpoint_id?`, `job_id?`, `jobstep_id?`, `attempt_id?`, `action_id?`, `transfer_id?` — correlation fields (see "Correlation model" below), present only where applicable to that event type;
+- `payload` — the event-type-specific data.
+
+This Specification defines the envelope only. No external transport, webhook mechanism, message broker, or ERP-facing API is defined here — how a future integration might consume these events is out of scope (see "Transactional consistency and event model" below).
+
 ## Correlation model
 
 Every durable record and domain event carries whichever of the following identifiers are applicable to it, so that endpoint, job, step, attempt, action, and (in a future Work Package) transfer can be related:
@@ -44,10 +59,19 @@ Every durable record and domain event carries whichever of the following identif
 - `endpoint_id`
 - `job_id`
 - `jobstep_id`
-- `attempt_id` (equals the Agent Protocol `action_id`, `docs/specifications/m0-agent-protocol-contract.md`)
+- `attempt_id` — the Server-side Domain identity for one JobStep execution attempt (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`).
+- `action_id` — the Agent Protocol identity for the corresponding dispatched action (`docs/specifications/m0-agent-protocol-contract.md`).
 - `transfer_id` — reserved for Issue #6; not defined by this Specification
 
+`attempt_id` and `action_id` are **kept distinct** — `Attempt` is a Server-side Domain concept and `action_id` is an Agent Protocol (wire) concept. For an Agent-executed Attempt the relationship is 1:1, but the identifiers are not merged into one field: both are recorded, and durably linked, so Domain identity is never coupled to the wire protocol's identifier scheme. A future non-Agent-executed Attempt type (not defined by this Specification) could in principle have no `action_id` at all.
+
 This is the minimum correlation set required by `docs/discovery/architecture-redesign.md` "Observability" ("Correlation must make it possible to relate endpoint, job, step, attempt, action, and transfer"). Additional correlation fields may be added by the Work Package that introduces the relevant concept (e.g., Issue #6 for `transfer_id`'s full meaning), without requiring this Specification to be revised for every addition, as long as they compose with this set rather than replace it.
+
+## Transactional consistency and event model
+
+Per ADR-0007: when a durable domain transition requires a domain event and/or an audit record, the domain-state change, its event, and any required audit record are persisted atomically in the same persistence transaction. A crash must never leave committed state without its required event/audit record, or a committed event/audit record for a transition that did not itself commit.
+
+**This is not event sourcing.** Current durable domain state remains the source of truth; domain events are durable facts emitted from already-committed transitions, not a log Bamep replays to reconstruct state. External publication/delivery semantics for future integrations are outside this Work Package.
 
 ## Inventory persistence boundary
 
@@ -57,14 +81,24 @@ This is the minimum correlation set required by `docs/discovery/architecture-red
 
 ## Auditability
 
-Durable audit records exist for every safety-relevant operator decision already required by earlier M0 ADRs:
+Durable audit records exist for two categories of safety-relevant activity, aligning this Specification with ADR-0007's full auditability requirement (which covers both operator decisions and destructive-operation dispatch/outcome, not operator decisions alone):
+
+**Operator decisions**, already required by earlier M0 ADRs:
 
 - Endpoint enrollment approval (`docs/decisions/0004-endpoint-identity-and-enrollment-bootstrap.md`);
 - hardware-confidence conflict resolution (`docs/specifications/m0-endpoint-identity-lifecycle.md`);
 - reconciliation decisions closing an Attempt as `Indeterminate`, and any decision authorizing a further Attempt for a destructive JobStep (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`);
 - Job cancellation decisions.
 
-An audit record is durable, immutable once written, and carries the correlation fields above plus whichever operator/actor identity is available. This Specification does not define the operator-identity/authentication model itself (an Administrative API concern, not yet a dedicated M0 Work Package) — it only establishes that these decisions must be durably and immutably recorded.
+**Destructive execution**, required by ADR-0007 and not previously made explicit in this Specification:
+
+- the authorization/decision enabling a destructive dispatch, where applicable (e.g., the operator decision authorizing a retry after `Indeterminate` — the same record as above, linked to the dispatch it authorizes);
+- the destructive Action dispatch itself (`ActionDispatch` for a destructive JobStep's Attempt);
+- its known terminal outcome (`Succeeded`/`Failed`/`Cancelled`/`Rejected`) or its `Indeterminate` resolution.
+
+An audit record is durable, immutable once written, and carries the correlation fields above. Actor attribution distinguishes an **operator actor** (a human decision, when operator identity is available) from a **system actor** (e.g., an automatic non-destructive retry per JobStep retry policy) where the distinction is known. This Specification does not define the operator-identity/authentication model itself (an Administrative API concern, not yet a dedicated M0 Work Package) — it only establishes that these records must be durably and immutably kept, with whichever actor information is available at the point of recording.
+
+Required audit records associated with a domain transition participate in the same atomic persistence transaction as that transition and its domain event (see "Transactional consistency and event model" above) — an audit record is never a best-effort side write.
 
 ## Observability responsibilities
 
@@ -75,6 +109,8 @@ An audit record is durable, immutable once written, and carries the correlation 
 ## Out of scope
 
 - concrete database schema, indexing, or migration strategy — implementation-time;
+- concrete performance thresholds for SQLite write contention/latency/backpressure — owned by Issue #7's validation, not defined here;
+- external event transport, webhook mechanism, message broker, or ERP-facing API — not defined by this Specification;
 - operator-identity/authentication model for audit-record attribution — not yet a dedicated M0 Work Package;
 - `transfer_id`'s full meaning and artifact-specific event shapes — Issue #6;
 - telemetry retention/aggregation policy — implementation-time, not an M0 architectural blocker;
@@ -94,7 +130,9 @@ Per `docs/development/testing.md` "Contract tests": domain-event schema/versioni
 
 Per `docs/development/testing.md` "Persistence and recovery tests": durable state survives restart; transient/high-frequency data (presence, progress) does not need to, and its absence after restart must not be misinterpreted as a domain-state loss.
 
-Per `docs/development/testing.md` "Simulator", and per the owner's explicit direction for this Work Package: the Simulator/validation strategy should eventually exercise **representative persistence load at the M0 20–24 concurrent-endpoint target**, measuring actual durable write volume and rate against the model in ADR-0007, so that any future backend change (e.g., to PostgreSQL) is evidence-driven rather than speculative. This is a requirement on Issue #7's scope, not implemented by this Specification.
+Per `docs/development/testing.md` "Simulator", and per ADR-0007: the Simulator/validation strategy **must** exercise representative persistence load at the M0 20–24 concurrent-endpoint target, measuring actual durable write volume, contention, latency, and backpressure against the expectation in ADR-0007, before the M0 architecture is considered validated. If that measurement shows unacceptable results, ADR-0007 must be revisited. This is a requirement on Issue #7's scope, not implemented by this Specification, and this Specification does not define the concrete performance thresholds that would make a result "unacceptable" — that determination belongs to Issue #7, informed by observed behavior.
+
+Per "Unit and domain tests": atomic-transaction tests demonstrating that a domain-state change, its required domain event, and any required audit record commit or fail together — never partially.
 
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
@@ -104,7 +142,7 @@ Manual: owner approval of this Specification.
 
 - ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`).
 - ADR-0004 — Endpoint identity (durable identity/credential/confidence state this Specification's events cover).
-- ADR-0005 — Agent control-plane protocol (`ActionProgress` as the canonical high-frequency, non-durable example; `action_id`/`attempt_id` correlation).
+- ADR-0005 — Agent control-plane protocol (`ActionProgress` as the canonical high-frequency, non-durable example; `action_id` as the distinct-but-linked counterpart to `attempt_id` in the correlation model).
 - ADR-0006 — Job/JobStep/Attempt state model (durable state and `Indeterminate` this Specification's events cover).
 
 ## Related work
