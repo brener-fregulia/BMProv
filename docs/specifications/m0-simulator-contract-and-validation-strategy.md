@@ -1,6 +1,6 @@
 # M0 — Simulator Contract and Validation Strategy
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
@@ -29,7 +29,7 @@ Define the Simulator's fidelity boundary, required scenarios, concurrency target
 - Simulator internal implementation architecture — process/thread model, crate/module structure, concrete configuration format — implementation-time detail, not an M0 architectural question;
 - concrete numeric acceptance thresholds for the persistence-load measurement (write latency/contention limits) — these depend on an actual implementation to observe, and are established when the first vertical slice runs the scenario (see "Persistence-load validation" below), not invented here without evidence;
 - production provisioning implementation, real disk formatting, real Windows installation, WinPE implementation, MikroTik-specific production adapter — all already excluded from M0 (`docs/specifications/m0-architecture-baseline.md` "Out of scope");
-- Administrative API / Web contract — not yet a dedicated M0 Work Package (see "Forward dependency: Web" below).
+- Administrative API / Web contract — recorded as a separate M0 architecture-planning gap, not resolved here (see "M0 architecture-planning gap: Administrative API / Web contract" below).
 
 ## Simulator fidelity boundary
 
@@ -38,7 +38,23 @@ Define the Simulator's fidelity boundary, required scenarios, concurrency target
 - **Simulated Endpoints/Agents** — participate in real Bamep Server-side behavior as realistically as an M0 environment allows: real Endpoint identity/enrollment flow, real Agent Protocol v1 message exchange, real Job/JobStep/Attempt orchestration, real scheduler/resource-lease contention, real persistence and reconciliation. Only the underlying physical device is not real.
 - **Faked boundaries** — boot mechanism (PXE/DHCP/UEFI/GRUB/WinPE), discovery/inventory hardware probing, and storage devices are stubbed with deterministic fixtures and temporary local storage (`docs/development/testing.md` "Fakes and test boundaries"; "Destructive-operation safety"). These are hardware/OS-boundary concerns the Simulator does not need to represent faithfully to validate Bamep's own orchestration logic.
 
-**Proposed, not yet separately owner-confirmed**: a Simulated Endpoint's Agent-side participant connects to the real Server-side Agent Control Gateway over the real Agent Protocol v1 transport (WSS, `docs/specifications/m0-agent-protocol-contract.md`), rather than substituting an in-process fake transport that only approximates the protocol's message contract. Rationale: several required scenarios (duplicate/delayed messages, Agent restart, disconnect/reconnect, acknowledgment timeout) are, per the Agent Protocol Specification itself, timing- and delivery-outcome-sensitive behaviors of the real transport — an in-process fake transport risks silently deciding delivery/timing semantics the real transport does not guarantee, which is exactly the kind of hidden architectural decision `docs/development/sdd.md` requires to be surfaced rather than assumed. `docs/development/testing.md` "Fakes and test boundaries" separately allows "Agent connections" as a fake boundary for Component/Integration-layer tests below the Simulator layer, which remains available for narrower tests that are not exercising Simulator-level orchestration realism; this does not conflict with the Simulator itself using the real transport for its own scenarios. This point determines Simulator/Server coupling architecture and is flagged for explicit owner confirmation rather than asserted as already decided.
+**Accepted (owner decision)**: at the Simulator level, a Simulated Endpoint's Agent-side participant MUST use the real Agent Protocol v1 transport path end-to-end — a real WSS connection to the real Server-side Agent Control Gateway, real Agent Protocol v1 UTF-8 JSON serialization, the real protocol handshake and credential validation, and real reconnect/disconnect behavior at the transport boundary. An in-process fake Agent transport does not satisfy Simulator-level acceptance for any scenario in the "Required scenarios" table below.
+
+This does not change `docs/development/testing.md` "Fakes and test boundaries", which separately and explicitly permits faking Agent connections for narrower Unit/Component/Integration tests where the real transport is not the behavior under test — that remains available below the Simulator layer; it is only Simulator-level scenarios that require the real transport.
+
+For Simulator execution, the production boot chain itself remains faked (per "Faked boundaries" above). The Simulator may receive deterministic fixture material representing the trusted Server fingerprint / boot-issued enrollment context that a real endpoint would otherwise obtain through the boot boundary. This fixture substitution must not be represented as validating the production fingerprint-delivery mechanism — that mechanism is owned by the Secure Boot / hardened boot-chain Technical Spike (Issue #10) and remains unresolved by this Specification (see "What the Simulator cannot represent").
+
+Given the fixture boundary above, the Simulator must still exercise real Agent Protocol behavior after it, including at minimum:
+
+- valid pinned Server fingerprint (successful TLS Server-authentication);
+- fingerprint mismatch failing closed before Agent Protocol authentication begins (`m0-agent-protocol-contract.md` "Transport and handshake" — a connection-level abort, never an `AuthError`);
+- valid and rejected Agent credentials (`SessionEstablished` vs. `AuthError`);
+- reconnect (fresh handshake after disconnect, `StatusQuery` on any Attempt the Server still considers in-flight, per `m0-agent-protocol-contract.md` "Reconnect / stale-command handling");
+- uncertain delivery / acknowledgment timeout scenarios where applicable (`m0-agent-protocol-contract.md` "Acknowledgment timeout semantics").
+
+Fault injection (delay, duplicate messages, disconnect, restart, etc.) may be controlled by the Simulated Agent or the test harness driving it, but the resulting Simulator-level scenario must still cross the real WSS/Agent Control Gateway boundary — fault injection controls timing and sequencing, it does not substitute for the transport itself.
+
+This is a Simulator fidelity decision and does not require a separate ADR: it does not establish a new durable architectural boundary beyond what ADR-0005 and `docs/specifications/m0-agent-protocol-contract.md` already define — it decides how the Simulator exercises that existing contract, not what the contract is.
 
 The Simulator does not replace physical integration testing for hardware-specific behavior (`docs/development/testing.md` "Simulator").
 
@@ -106,9 +122,15 @@ Per `docs/development/testing.md` "Integration Environment", the following remai
 
 Three explicitly isolated Technical Spikes feed, but are not resolved by, this Specification: the WinPE boot mechanism (Issue #8), Secure Boot / hardened boot chain (Issue #10), and driver-provider integration (Issue #11). Their results may later require the Simulator's fidelity boundary to be revisited (for example, if Issue #10 finds the Agent Protocol Server-fingerprint delivery mechanism must change, per `m0-agent-protocol-contract.md`), but none of the three block this Specification's own scope.
 
-## Forward dependency: Web
+## M0 architecture-planning gap: Administrative API / Web contract
 
-The first implementation vertical slice (`docs/specifications/m0-architecture-baseline.md`) ends with "Web reflects result." No Administrative API or Web Specification exists yet as a dedicated M0 Work Package — several already-approved Specifications note operator-identity/authentication and Administrative API design as unresolved (`m0-persistence-observability-and-domain-events.md` "Out of scope"; `m0-agent-protocol-contract.md` "Open questions"). This Specification records that the vertical slice's final step has an open contract dependency on future Web/API work; it does not design that contract and does not block on it, since the Simulator scenarios above validate Server-side orchestration independent of how Web later consumes it.
+The first implementation vertical slice (`docs/specifications/m0-architecture-baseline.md` "First implementation slice after M0") ends with "Web reflects result." No Administrative API or Server↔Web contract has been specified by any M0 Work Package — `docs/specifications/m0-stack-and-boundaries-baseline.md` already treats Web Administration and the Administrative API as a distinct Presentation-layer component boundary, independently deployable and versioned from the Server (`docs/discovery/architecture-redesign.md`: "Bamep Web is independently deployable and updateable from Bamep Server"), and several already-approved Specifications separately note operator-identity/authentication and Administrative API design as unresolved (`m0-persistence-observability-and-domain-events.md` "Out of scope"; `m0-agent-protocol-contract.md` "Open questions").
+
+**This is not a harmless future implementation dependency.** `docs/specifications/m0-architecture-baseline.md` requires both that the first post-M0 vertical slice ends with "Web reflects result" *and* that no required architectural decision is hidden inside a future implementation Work Package (acceptance criterion 7). The Server↔Web interface is a shared, independently evolving component boundary — leaving it unspecified means the vertical slice's final step has no defined contract to implement against, which is exactly the kind of hidden decision acceptance criterion 7 exists to prevent.
+
+**Recorded as an M0 architecture-planning gap, not resolved here**: a small, dedicated future Work Package is needed to define the minimum Administrative API / Web read contract required by the first vertical slice — the Server-side query/read surface necessary for Web to observe Endpoint/Job/result state (e.g., current Endpoint status, Job/JobStep/Attempt progress and terminal outcome). This Specification does not design that contract, does not invent authentication or multi-user policy, and does not create or modify any GitHub Issue or Project item for it — materialization of that future Work Package requires separate, explicit owner authorization.
+
+This gap does not block approval of this Specification: Issue #7's own scope is the Simulator contract and M0 validation strategy, not the Administrative API. The Simulator scenarios defined above validate Server-side orchestration independent of how Web later consumes it, and remain valid regardless of when the Administrative API gap is materialized.
 
 ## Acceptance criteria
 
@@ -116,17 +138,17 @@ The first implementation vertical slice (`docs/specifications/m0-architecture-ba
 - The simulated vertical slice has defined behavior, contracts, and failure scenarios (Issue #7 acceptance criterion 2; `docs/specifications/m0-architecture-baseline.md` acceptance criterion 4) — satisfied by the "Simulated Endpoint contract" and "Required scenarios" sections.
 - Automated validation boundaries are explicit per M0 concept (`docs/specifications/m0-architecture-baseline.md` acceptance criterion 6) — satisfied by "Automated validation boundary."
 - The persistence-load validation required by ADR-0007 is defined as an explicit Simulator scenario, not silently left unaddressed.
-- No required architectural decision is hidden inside the first post-M0 implementation Work Package (`docs/specifications/m0-architecture-baseline.md` acceptance criterion 7) — the one genuine open fork identified (Simulator/Server transport coupling) is flagged explicitly for owner decision rather than assumed.
+- No required architectural decision is hidden inside the first post-M0 implementation Work Package (`docs/specifications/m0-architecture-baseline.md` acceptance criterion 7) — the Simulator/Server transport coupling fork identified during drafting has been resolved by explicit owner decision (see "Simulator fidelity boundary"); the Administrative API/Web contract gap identified during drafting is recorded separately, not hidden, as requiring a dedicated future Work Package (see "M0 architecture-planning gap: Administrative API / Web contract").
 
 ## Validation expectations
 
 Automated: none produced directly by this Work Package — it is decision/specification work, consistent with Issue #7's own stated validation ("this Work Package defines the validation strategy other work will implement against").
 
-Manual: owner approval of this Specification.
+Manual: owner approval of this Specification — confirmed (see Status).
 
 ## Related ADRs
 
-No new ADR is introduced by this Work Package. This Specification consolidates and applies the destructive-operation, protocol, scheduling, persistence, and data-plane decisions already `Accepted` in ADR-0004 through ADR-0008; it does not itself establish a new durable architectural boundary with meaningful alternatives requiring a separate ADR (`docs/development/documentation-policy.md` "Architectural Decision Records"), aside from the one flagged open fork above, which the owner may resolve directly in this Specification without a dedicated ADR unless the resulting decision proves durable and contested enough to warrant one.
+No new ADR is introduced by this Work Package. This Specification consolidates and applies the destructive-operation, protocol, scheduling, persistence, and data-plane decisions already `Accepted` in ADR-0004 through ADR-0008, including the Simulator-transport fidelity decision recorded above, which does not itself establish a new durable architectural boundary beyond what ADR-0005 already defines (`docs/development/documentation-policy.md` "Architectural Decision Records").
 
 ## Related work
 
@@ -138,9 +160,9 @@ No new ADR is introduced by this Work Package. This Specification consolidates a
 
 ## Open questions
 
-1. Whether Simulated Agents connect over the real Agent Protocol v1 transport (WSS) or an in-process fake transport approximating the same message contract — proposed direction stated above ("Simulator fidelity boundary"), not yet separately owner-confirmed.
-2. Concrete persistence-load acceptance thresholds — established when the first post-M0 vertical slice actually runs the measurement; not decided here.
-3. Simulator internal implementation architecture (process/thread model, configuration format, crate/module structure) — implementation-time, not an M0 architectural question.
-4. The Administrative API / Web contract for the vertical slice's final "Web reflects result" step — not yet a dedicated M0 Work Package.
+None of the following are blocking for owner approval of Issue #7 — each is explicitly deferred evidence-driven or implementation-time detail, not an unresolved architectural fork. The Administrative API/Web gap is tracked separately above, not as an open question of this Specification's own scope.
 
-Status: Proposed - awaiting owner approval.
+1. Concrete persistence-load acceptance thresholds — established when the first post-M0 vertical slice actually runs the measurement; not decided here.
+2. Simulator internal implementation architecture (process/thread model, configuration format, crate/module structure) — implementation-time, not an M0 architectural question.
+
+Status: Approved.
