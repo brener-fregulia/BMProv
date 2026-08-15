@@ -52,18 +52,38 @@ Network capacity, storage read/write capacity, CPU/worker capacity, and other no
 `Pending → PreconditionsSatisfied → Dispatching → {Succeeded | Failed | Cancelled}`
 
 - `Pending`: created, preconditions not yet evaluated.
-- `PreconditionsSatisfied`: an **eligibility** state, not a permanently valid authorization. Initial preconditions hold at evaluation time, making the JobStep eligible to request its Attempt-scoped resource leases. It does not, by itself, authorize dispatch — see "Revalidation immediately before dispatch."
+- `PreconditionsSatisfied`: **preliminary eligibility only**. Confirms whichever JobStep-specific declared preconditions do not depend on Attempt-scoped resource leases or workflow/scheduler authorization (for example, a prior JobStep's required output existing). It does **not** claim that the complete destructive dispatch precondition set (see "Destructive dispatch preconditions" below) already holds — workflow/scheduler authorization and Attempt-scoped leases are not yet established at this stage. It only makes the JobStep eligible to request its Attempt-scoped leases.
 - `Dispatching`: at least one Attempt has been made; persists across retries. The JobStep does not reach a terminal state merely because one Attempt failed or was closed `Indeterminate`, if retry policy permits another Attempt.
 - `Succeeded` / `Failed` / `Cancelled`: terminal. `Failed` carries a `failure_reason`: `PreconditionNotMet` (initial or revalidation failure), `DispatchRejected`, `ExecutionFailed`, or `ReconciliationIndeterminate` (retry policy determined no further Attempt will be made after an `Indeterminate` outcome).
 
+### Workflow/scheduler authorization (satisfies ADR-0004's deferred precondition 3)
+
+Defined **strictly as workflow/scheduler-level authorization**. It does not itself require, or recursively depend on, the complete destructive dispatch precondition set below — of which it is one independent member, not a synonym for the whole set. Required for **every** Attempt dispatch, destructive or not:
+
+1. the Job is `Running`, holds its Endpoint-exclusivity lease, and is not `Cancelling` or terminal;
+2. the JobStep is the Job's current active step;
+3. retry/reconciliation policy permits creation of this Attempt (see "Retry policy");
+4. all required Attempt-scoped resource leases are held;
+5. no unresolved prior Attempt state exists that requires an explicit decision (an operator decision, for a destructive JobStep) before another Attempt may be created.
+
+### Destructive dispatch preconditions
+
+For a destructive JobStep, dispatch additionally requires the full composition of the six independent preconditions from `docs/specifications/m0-endpoint-identity-lifecycle.md`:
+
+1. trusted persistent Endpoint identity;
+2. authenticated current Agent session (`CredentialActive`);
+3. workflow/scheduler authorization — exactly the definition immediately above, **not** recursively this complete six-item set;
+4. sufficiently fresh inventory (current inventory revision);
+5. target disk identity/fingerprint revalidation;
+6. hardware confidence `Consistent` (not `LoweredConfidence`/`Conflict`).
+
+A non-destructive JobStep requires only workflow/scheduler authorization, plus whichever of its own declared preconditions are time-sensitive (see "Revalidation immediately before dispatch").
+
 ### Revalidation immediately before dispatch
 
-`PreconditionsSatisfied` does not remain valid indefinitely while a JobStep waits for its Attempt-scoped leases to become available. Immediately after those leases are acquired and immediately before `ActionDispatch` is sent, the Server revalidates all time-sensitive preconditions:
+`PreconditionsSatisfied` is preliminary eligibility only (see "JobStep states") — it does not assert that workflow/scheduler authorization or the destructive dispatch preconditions already hold, since Attempt-scoped leases and workflow authorization are not yet established at that stage. The complete precondition set relevant to the JobStep — workflow/scheduler authorization always, plus the full six-item destructive dispatch composition for a destructive JobStep — is evaluated once, atomically, immediately after Attempt-scoped leases are acquired and immediately before `ActionDispatch` is sent.
 
-- for a **destructive** JobStep, the full destructive-operation authorization precondition set from `docs/specifications/m0-endpoint-identity-lifecycle.md` is re-checked at this exact moment — current Agent/session state (`CredentialActive`), current inventory revision, target disk identity/fingerprint, and hardware confidence (`Consistent`, not `LoweredConfidence`/`Conflict`);
-- for a **non-destructive** JobStep, whichever of its declared preconditions are time-sensitive are re-checked; non-destructive JobSteps are not exempt from revalidation merely because they are non-destructive.
-
-If revalidation fails, the Attempt is **not** created and `ActionDispatch` is **not** sent. The just-acquired Attempt-scoped leases are released, and the JobStep returns to `Pending` for re-evaluation. A JobStep must never dispatch based only on a stale earlier `PreconditionsSatisfied` evaluation. Whether repeated revalidation failure should eventually produce a terminal `Failed{PreconditionNotMet}` (e.g., after a bounded number of cycles, or immediately for a permanent condition such as the Endpoint reaching `Retired`) is implementation-time policy, not decided here.
+If that revalidation fails, the Attempt is **not** created and `ActionDispatch` is **not** sent. The just-acquired Attempt-scoped leases are released, and the JobStep returns to `Pending` for re-evaluation. A JobStep must never dispatch based only on a stale earlier `PreconditionsSatisfied` evaluation. Whether repeated revalidation failure should eventually produce a terminal `Failed{PreconditionNotMet}` (e.g., after a bounded number of cycles, or immediately for a permanent condition such as the Endpoint reaching `Retired`) is implementation-time policy, not decided here.
 
 ### Attempt states
 
@@ -86,18 +106,13 @@ If revalidation fails, the Attempt is **not** created and `ActionDispatch` is **
 
 On Server restart, every Attempt persisted as `Dispatched` or `InProgress` is loaded as `AwaitingReconciliation`, and reconciliation proceeds as above once the relevant Agent session re-establishes (ADR-0004/ADR-0005 handshake). This is never a blind resume: no Attempt leaves `AwaitingReconciliation` without an explicit `StatusReport`-driven transition or, for destructive steps, an explicit operator decision.
 
-### "Authorized Job/action" (satisfies ADR-0004's deferred precondition 3)
+### Job admission
 
-**Job admission** (`Pending` → `Running`), checked once per Job:
+Checked once per Job, at `Pending` → `Running`:
 
 1. the target Endpoint's exclusivity lease is available and is granted to this Job.
 
-**Attempt dispatch** (revalidated immediately before every `ActionDispatch`, including retries — see "Revalidation immediately before dispatch"):
-
-1. the Job is `Running` (not `Cancelling`, not terminal) and the JobStep is the Job's current active step;
-2. required Attempt-scoped resource leases (network/storage/CPU-worker) are held;
-3. for a destructive JobStep, the full destructive-operation authorization precondition set (`docs/specifications/m0-endpoint-identity-lifecycle.md`) holds at this moment;
-4. no unresolved `Indeterminate` Attempt exists for this JobStep without an explicit decision authorizing the new Attempt (operator decision for destructive JobSteps; retry policy for non-destructive JobSteps).
+This is distinct from, and prior to, the per-Attempt "Workflow/scheduler authorization" and "Destructive dispatch preconditions" above, which are evaluated at every dispatch throughout the Job's active lifetime, not just at admission.
 
 ### Retry policy (fulfills ADR-0005's deferred policy question)
 
@@ -108,13 +123,16 @@ On Server restart, every Attempt persisted as `Dispatched` or `InProgress` is lo
 ### Job cancellation
 
 - `Pending` → `Cancelled`: cancellation requested before any JobStep has begun — nothing active to await. Any Endpoint-exclusivity lease already granted is released as part of this transition.
-- `Running` → `Cancelling`: cancellation requested while JobSteps are in progress; `CancelAction` is sent for the currently active Attempt.
-- While `Cancelling`: no new JobStep or Attempt may begin; the active Attempt may still be `InProgress` or `AwaitingReconciliation`.
+- `Running` → `Cancelling`: cancellation requested while the Job is active.
+  - If a JobStep currently has an active Attempt (`Dispatched`/`InProgress`/`AwaitingReconciliation`), `CancelAction` is sent for it.
+  - If no JobStep currently has an active Attempt (e.g., a JobStep is `Pending`/`PreconditionsSatisfied` awaiting Attempt-scoped leases, or in the gap between retries), no `CancelAction` is sent — there is nothing dispatched to cancel.
+- While `Cancelling`: no new JobStep or Attempt may begin.
   - `CancelAck{outcome: Cancelled}`: the Attempt (and its JobStep) becomes `Cancelled`; the Job proceeds to `Cancelled`.
-  - `CancelAck{outcome: AlreadyCompleted}`: the Attempt's actual, already-determined terminal outcome stands; the Job proceeds to `Cancelled` once that outcome is recorded, since no further JobStep begins.
+  - `CancelAck{outcome: AlreadyCompleted}`: proves only that the Agent considers the action already terminal — it does **not** by itself reveal whether the Attempt `Succeeded`, `Failed`, or was `Cancelled`. If the Server already holds the Attempt's authoritative terminal outcome (from an earlier `ActionResult`), that outcome stands unchanged. If the Server does not yet know the terminal outcome, the Attempt moves to `AwaitingReconciliation` and the Server issues `StatusQuery` to learn it — the outcome is never assumed from `AlreadyCompleted` alone. The Job remains `Cancelling` until the Attempt's actual terminal state is known or reconciliation explicitly resolves it (including, if necessary, to `Indeterminate`).
   - `CancelAck{outcome: CannotCancel}`: must **not** by itself produce Job `Cancelled`. The Attempt continues to whatever terminal outcome it actually reaches (`Succeeded`/`Failed`); only once that real outcome is known does the Job proceed to `Cancelled` — no further JobStep begins, even though this JobStep itself ran to completion.
   - `CancelAck{outcome: Unknown}`: requires reconciliation. The Attempt moves through `AwaitingReconciliation` → (`Indeterminate` via explicit decision, or a resolved terminal state) exactly as in the non-cancellation case; the Job remains `Cancelling` until that resolves.
-- `Cancelling` → `Cancelled`: reached only once the workflow is known to have stopped — the active Attempt has reached `Succeeded`, `Failed`, `Cancelled`, `Rejected`, or `Indeterminate` with no further Attempt authorized — and no active or uncertain execution remains. The Job's Endpoint-exclusivity lease is released at this point.
+  - No active Attempt existed when cancellation was requested: nothing to await — proceed directly to `Cancelling` → `Cancelled` (below), since no execution is active or uncertain.
+- `Cancelling` → `Cancelled`: reached once the workflow is known to have stopped — the active Attempt (if any) has reached `Succeeded`, `Failed`, `Cancelled`, `Rejected`, or `Indeterminate` with no further Attempt authorized, or there was no active Attempt to begin with — and no active or uncertain execution remains. The Job's Endpoint-exclusivity lease is released at this point.
 
 ## Alternatives considered
 
