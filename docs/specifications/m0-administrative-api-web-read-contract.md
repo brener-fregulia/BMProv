@@ -1,6 +1,6 @@
 # M0 — Minimum Administrative API and Web Read Contract
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
@@ -122,7 +122,7 @@ The minimum resources Web must be able to query, each scoped by its already-defi
 - `endpoint_id`;
 - identity-lifecycle state: `PendingEnrollment` | `Enrolled` | `Retired` (`m0-endpoint-identity-lifecycle.md` "Endpoint identity lifecycle");
 - credential/session state: `NoActiveCredential` | `CredentialActive` | `CredentialExpired` | `CredentialRevoked` (`m0-endpoint-identity-lifecycle.md` "Credential/session lifecycle") — exposed directly, reusing the accepted vocabulary, not summarized into a derived connectivity flag;
-- current Agent presence, represented **separately** as a simple runtime observation (e.g. `Connected` | `Disconnected`): transient/runtime state, distinct from and never derived from the credential dimension above. An Endpoint may hold a valid (`CredentialActive`) credential while currently disconnected — presence and credential validity are different facts (`m0-endpoint-identity-lifecycle.md` "State dimensions") and this representation must not conflate them;
+- `agent_presence`: `Connected` | `Disconnected` — a transient runtime observation, represented **separately** from and never derived from the credential dimension above. An Endpoint may hold a valid (`CredentialActive`) credential while currently disconnected — presence and credential validity are different facts (`m0-endpoint-identity-lifecycle.md` "State dimensions") and this representation must not conflate them. No additional presence states are defined in M0;
 - hardware-confidence state: `Consistent` | `LoweredConfidence` | `Conflict` (`m0-endpoint-identity-lifecycle.md` "Hardware/identity-confidence state") — required so Web can surface a `LoweredConfidence`/`Conflict` condition for operator review, consistent with that Specification's own requirement that these conditions "surface for operator awareness and review";
 - current inventory revision identifier/reference, and whether a current inventory revision exists for the Endpoint (i.e., whether at least one durable inventory revision has been recorded, per `m0-persistence-observability-and-domain-events.md` "Inventory persistence boundary"). No open-ended inventory-summary object is defined by this minimum contract — its structure would only be decidable during implementation; a richer inventory read surface is a future extension once the inventory content model itself is specified by a future Work Package, not invented here.
 
@@ -148,6 +148,7 @@ The minimum resources Web must be able to query, each scoped by its already-defi
 
 ### Transfer / Artifact summary (for a JobStep involving data-plane transfer)
 
+- `artifact_id` — a stable opaque JSON string, consistent with the identifier rules in "Wire format and versioning baseline" above (its generation format is not chosen here), for stable correlation/identity of the Artifact represented by this summary;
 - Artifact lifecycle state: `Incomplete` | `PendingVerification` | `Verified` | `Failed` (`m0-data-plane-and-storage-contracts.md` "Artifact lifecycle");
 - `capture_consistency`: `NotApplicable` | `NotEstablished` | `Established`, when the Artifact type requires it (`m0-data-plane-and-storage-contracts.md` "Capture/source-consistency fact");
 - `transfer_id` for correlation.
@@ -195,7 +196,7 @@ Expected contract-test coverage once implemented, per `docs/development/testing.
 - `GET /api/admin/v1/endpoints/{endpoint_id}` and `GET /api/admin/v1/jobs/{job_id}` returning HTTP `200` with the documented representation for an existing resource, and HTTP `404` for a nonexistent resource identifier;
 - the Job response correctly nesting JobStep, Attempt, progress, and Transfer/Artifact summaries as defined above, without exposing separate JobStep/Attempt endpoints.
 
-Manual: owner approval of this Specification.
+Manual: owner approval of this Specification — confirmed (see Status).
 
 ## Related ADRs
 
@@ -224,4 +225,4 @@ None of the following are blocking for owner approval of Issue #12 — each is e
 6. Whether command/write semantics will eventually be required for the vertical slice — surfaced as an unresolved finding above; not assumed.
 7. The eventual production Administrative API's update-notification mechanism (if any) — `docs/discovery/architecture-redesign.md` leaves this open among several candidates for the Web/administrative boundary; this Specification's snapshot-read-only scoping applies to this minimum contract only and does not decide it.
 
-Status: Proposed - awaiting owner approval.
+Status: Approved.
