@@ -14,91 +14,125 @@ M0 requires resolving the durable Job/JobStep state model and the scheduler/reso
 
 This ADR also resolves two questions explicitly deferred to Issue #4 by earlier M0 ADRs: what "authorized Job/action" means for ADR-0004's destructive-operation authorization precondition 3, and the retry *policy* that ADR-0005 left open (ADR-0005 defines only the retry *mechanism* — a fresh `action_id` with `retry_of`).
 
+This revision incorporates owner review corrections to the initially accepted model: revalidation of time-sensitive preconditions immediately before dispatch, Job-scoped (not Attempt-scoped) endpoint exclusivity, an explicit terminal `Indeterminate` Attempt outcome, a complete Agent Protocol state mapping, and a non-terminal Job `Cancelling` state.
+
 ## Decision
 
 ### Three-tier domain model: Job, JobStep, Attempt
 
 - **Job**: one overall workflow targeting a single Endpoint (e.g., a provisioning or recovery workflow), composed of an ordered sequence of JobSteps. M0 defines a linear sequence, not a DAG — no current requirement or evidence describes branching or parallel JobSteps within one Job.
 - **JobStep**: one stage of the Job's workflow (e.g., "write image", "verify backup"). Carries preconditions, results, postconditions, and cancellation semantics. A JobStep may be attempted more than once; each attempt is a separate `Attempt`.
-- **Attempt**: one execution attempt of a JobStep, corresponding 1:1 to one Agent Protocol `action_id` lifecycle (ADR-0005). A retry creates a new Attempt with a fresh `action_id` and `retry_of` referencing the prior Attempt's `action_id`. The Attempt consumes the Agent Protocol's per-action states (`Accepted`/`Running`/`Succeeded`/`Failed`/`Cancelled`/`Unknown`) and translates them into this Server-side durable record — the Attempt's own state is the Server's authoritative interpretation, not a re-export of the Agent's local vocabulary.
+- **Attempt**: one execution attempt of a JobStep, corresponding 1:1 to one Agent Protocol `action_id` lifecycle (ADR-0005). A retry creates a new Attempt with a fresh `action_id` and `retry_of` referencing the prior Attempt's `action_id`. The Attempt consumes the Agent Protocol's per-action states and translates them into this Server-side durable record — the Attempt's own state is the Server's authoritative interpretation, not a re-export of the Agent's local vocabulary.
 
 ### Job states
 
-`Pending → Running → {Succeeded | Failed | Cancelled}`
+`Pending → Running → Cancelling → {Succeeded | Failed | Cancelled}` (`Cancelling` reachable only from `Running`; `Cancelled` also reachable directly from `Pending`)
 
-- `Pending`: created, no JobStep has begun.
-- `Running`: iterating through its ordered JobSteps.
-- `Succeeded`: all JobSteps succeeded.
-- `Failed`: a JobStep reached `Failed` and no partial-failure/skip policy applied. M0 does not define partial-failure tolerance — a single JobStep failure fails the Job. Whether finer-grained partial-failure semantics are needed is an explicit open question, not decided here.
-- `Cancelled`: explicit cancellation (operator-initiated or a defined system trigger), propagated to the currently active JobStep/Attempt via `CancelAction`.
+- `Pending`: created. Also the state in which a Job waits for its target Endpoint's exclusivity lease to become available (see "Endpoint-exclusivity lease" below).
+- `Running`: the Job holds its Endpoint's exclusivity lease and is iterating through its ordered JobSteps.
+- `Cancelling`: cancellation was requested while the Job was `Running`. No new JobStep or Attempt may begin while `Cancelling`. A cancellation request is not itself proof that execution stopped — the Job remains `Cancelling` until the currently active Attempt reaches a terminal outcome or is closed `Indeterminate` with no further Attempt authorized (see "Job cancellation" below).
+- `Succeeded`: every JobStep in the Job's ordered sequence reached `Succeeded` (not reachable once cancellation has been requested).
+- `Failed`: a JobStep reached `Failed` and no partial-failure/skip policy applied. M0 defines none — a single JobStep failure fails the Job. Finer-grained partial-failure semantics remain an explicit open question.
+- `Cancelled`: reached from `Pending` (no Attempt ever started, nothing active to await) or from `Cancelling` (once the workflow is known to have stopped and no active or uncertain execution remains).
+
+### Endpoint-exclusivity lease (Job-scoped)
+
+Exclusivity is scoped to the **Job**, not the Attempt or JobStep: one Job owns its target Endpoint exclusively for the Job's entire active lifetime. M0 does not need interleaving of two active Jobs against the same Endpoint.
+
+- Acquired when the Job is admitted from `Pending` to `Running`. A Job remains `Pending` until its target Endpoint's exclusivity lease is available and granted to it; a second Job targeting an already-exclusively-held Endpoint remains `Pending` (queued) rather than being rejected outright.
+- Retained, without exception, across JobStep boundaries, Attempt boundaries, retries, and `AwaitingReconciliation`, for as long as the Job is `Running` or `Cancelling`.
+- Released only when the Job reaches a genuinely terminal state (`Succeeded`, `Failed`, or `Cancelled`). Because `Cancelled` is itself only reached once no active or uncertain execution remains, release never happens while an Attempt's fate is still uncertain.
+
+### Other resource leases (Attempt-scoped)
+
+Network capacity, storage read/write capacity, CPU/worker capacity, and other non-exclusivity resource types (extensible, not a closed set) remain scoped to individual Attempts: acquired immediately before an Attempt's dispatch, jointly with the revalidation step below, and released when that Attempt reaches a terminal state (`Succeeded`, `Failed`, `Cancelled`, `Rejected`, or `Indeterminate`). Retention policy for these lease types during `AwaitingReconciliation` remains implementation-time, not decided here. Lease acquisition ordering, fairness, and priority across competing JobSteps are likewise not decided here — M0 requires the lease-competition mechanism to exist, not a specific scheduling algorithm.
 
 ### JobStep states
 
 `Pending → PreconditionsSatisfied → Dispatching → {Succeeded | Failed | Cancelled}`
 
 - `Pending`: created, preconditions not yet evaluated.
-- `PreconditionsSatisfied`: preconditions hold at evaluation time — including, for a destructive JobStep, the full destructive-operation authorization precondition set from `docs/specifications/m0-endpoint-identity-lifecycle.md`. Eligible for resource-lease acquisition and dispatch.
-- `Dispatching`: at least one Attempt has been made; persists across retries. The JobStep does not reach a terminal state merely because one Attempt failed, if retry policy (below) permits another Attempt.
-- `Succeeded` / `Failed` / `Cancelled`: terminal, set once an Attempt succeeds, once retry policy determines no further Attempt will be made, or once cancellation completes.
+- `PreconditionsSatisfied`: an **eligibility** state, not a permanently valid authorization. Initial preconditions hold at evaluation time, making the JobStep eligible to request its Attempt-scoped resource leases. It does not, by itself, authorize dispatch — see "Revalidation immediately before dispatch."
+- `Dispatching`: at least one Attempt has been made; persists across retries. The JobStep does not reach a terminal state merely because one Attempt failed or was closed `Indeterminate`, if retry policy permits another Attempt.
+- `Succeeded` / `Failed` / `Cancelled`: terminal. `Failed` carries a `failure_reason`: `PreconditionNotMet` (initial or revalidation failure), `DispatchRejected`, `ExecutionFailed`, or `ReconciliationIndeterminate` (retry policy determined no further Attempt will be made after an `Indeterminate` outcome).
+
+### Revalidation immediately before dispatch
+
+`PreconditionsSatisfied` does not remain valid indefinitely while a JobStep waits for its Attempt-scoped leases to become available. Immediately after those leases are acquired and immediately before `ActionDispatch` is sent, the Server revalidates all time-sensitive preconditions:
+
+- for a **destructive** JobStep, the full destructive-operation authorization precondition set from `docs/specifications/m0-endpoint-identity-lifecycle.md` is re-checked at this exact moment — current Agent/session state (`CredentialActive`), current inventory revision, target disk identity/fingerprint, and hardware confidence (`Consistent`, not `LoweredConfidence`/`Conflict`);
+- for a **non-destructive** JobStep, whichever of its declared preconditions are time-sensitive are re-checked; non-destructive JobSteps are not exempt from revalidation merely because they are non-destructive.
+
+If revalidation fails, the Attempt is **not** created and `ActionDispatch` is **not** sent. The just-acquired Attempt-scoped leases are released, and the JobStep returns to `Pending` for re-evaluation. A JobStep must never dispatch based only on a stale earlier `PreconditionsSatisfied` evaluation. Whether repeated revalidation failure should eventually produce a terminal `Failed{PreconditionNotMet}` (e.g., after a bounded number of cycles, or immediately for a permanent condition such as the Endpoint reaching `Retired`) is implementation-time policy, not decided here.
 
 ### Attempt states
 
-`Dispatched → InProgress → {Succeeded | Failed | Cancelled | Rejected}`, with `AwaitingReconciliation` reachable from `Dispatched` or `InProgress`.
+`Dispatched → InProgress → {Succeeded | Failed | Cancelled | Rejected}`, with `AwaitingReconciliation` reachable from `Dispatched` or `InProgress`, and `Indeterminate` reachable only from `AwaitingReconciliation`.
 
 - `Dispatched`: `ActionDispatch` sent; awaiting `ActionAck`.
-- `InProgress`: `ActionAck{outcome: Accepted}` received.
-- `Rejected`: `ActionAck{outcome: Rejected}` received — the Attempt never executed. Kept distinct from `Failed` for diagnostic and retry-decision purposes, and because ADR-0005 already requires the Agent Protocol layer to never conflate the two.
-- `Succeeded` / `Failed` / `Cancelled`: terminal, populated from `ActionResult` (`Succeeded`/`Failed`) or `CancelAck{Cancelled}`.
-- `AwaitingReconciliation`: the Attempt's true outcome cannot currently be determined — reached on `ActionAck` timeout (an uncertain delivery outcome per ADR-0005, not proof of non-execution), on connection loss while `InProgress`, or on Server restart with an Attempt that was `Dispatched`/`InProgress` at the time of the crash. Resolved only by an explicit `StatusQuery`/`StatusReport` exchange (see "Reconciliation" below) — never by assumption.
+- `InProgress`: the Agent has accepted the action and no terminal outcome is yet known. Reached from `ActionAck{outcome: Accepted}`, and equally from `StatusReport{known_state: Accepted}` or `StatusReport{known_state: Running}` during reconciliation — both Agent-side `Accepted` and `Running` map to this one Attempt state. This Specification-level model does not duplicate the Agent Protocol's finer-grained Accepted/Running distinction; the Server does not need it at this granularity.
+- `Rejected`: `ActionAck{outcome: Rejected}` received — the Attempt never executed. Kept distinct from `Failed`, consistent with ADR-0005.
+- `Succeeded` / `Failed` / `Cancelled`: terminal, populated from `ActionResult` or `CancelAck{outcome: Cancelled}`.
+- `AwaitingReconciliation`: non-terminal. The Attempt's true outcome cannot currently be determined — reached on `ActionAck` timeout (an uncertain delivery outcome, not proof of non-execution), on connection loss while `InProgress`, or on Server restart with an Attempt that was `Dispatched`/`InProgress` at the time of the crash.
+- `Indeterminate` (terminal): the Server has concluded, through an **explicit reconciliation decision**, that it cannot establish whether or how the Attempt executed. Must never be interpreted as `Succeeded`, `Failed`, or "not executed" — it is its own distinct outcome. Reached only from `AwaitingReconciliation`, never automatically merely because a single `StatusReport{known_state: Unknown}` was received.
 
-### Resource leases and scheduling
+### Reconciliation and the Indeterminate outcome
 
-The Scheduler grants **resource leases** to a JobStep's Attempt before dispatch. Lease types are extensible, not a closed enum; M0 requires at minimum: endpoint exclusivity, network capacity, storage read/write capacity, and CPU/worker capacity. Concurrency is governed by lease availability, never a single fixed global number.
+- `AwaitingReconciliation` → `InProgress`: `StatusReport{known_state: Accepted | Running}`.
+- `AwaitingReconciliation` → `Succeeded` / `Failed` / `Cancelled`: `StatusReport` reports a matching terminal Agent-action state, adopted explicitly.
+- `AwaitingReconciliation` → `Indeterminate`: an explicit reconciliation decision closes the Attempt as indeterminate — typically because `StatusReport{known_state: Unknown}` was received and no further evidence is expected, or because no Agent session re-establishes within an implementation-defined window and the decision is made to stop waiting.
+  - For a **destructive** JobStep: this transition, and any subsequent Attempt, require an **explicit recorded operator decision**. The same operator decision both closes the prior Attempt as `Indeterminate` and separately determines whether a new Attempt is authorized. `Unknown` never automatically creates a new Attempt for a destructive JobStep.
+  - For a **non-destructive** JobStep: a new Attempt after `Indeterminate` is permitted only when that JobStep's own retry policy explicitly supports retrying from an indeterminate outcome. Being non-destructive does not by itself imply duplicate execution is safe.
 
-- A lease is acquired when a JobStep enters `PreconditionsSatisfied` and is about to be dispatched, and released when its Attempt reaches a terminal state (`Succeeded`/`Failed`/`Cancelled`/`Rejected`).
-- **Endpoint-exclusivity leases are the one type this ADR constrains precisely, for safety**: retained through `AwaitingReconciliation`, never released early, so that no second JobStep can be dispatched against the same Endpoint while an earlier Attempt's true outcome is unknown. This directly supports the "authorized Job/action" precondition below.
-- Retention/release policy for other lease types (network, storage, CPU/worker) during `AwaitingReconciliation` is not decided here — it does not carry the same safety implication as endpoint exclusivity and is left as implementation-time policy.
-- Lease acquisition ordering, fairness, and priority across competing JobSteps are not decided here — M0 requires the lease-competition mechanism to exist, not a specific scheduling algorithm.
+On Server restart, every Attempt persisted as `Dispatched` or `InProgress` is loaded as `AwaitingReconciliation`, and reconciliation proceeds as above once the relevant Agent session re-establishes (ADR-0004/ADR-0005 handshake). This is never a blind resume: no Attempt leaves `AwaitingReconciliation` without an explicit `StatusReport`-driven transition or, for destructive steps, an explicit operator decision.
 
 ### "Authorized Job/action" (satisfies ADR-0004's deferred precondition 3)
 
-A Job/action dispatch is authorized when, at dispatch time:
+**Job admission** (`Pending` → `Running`), checked once per Job:
 
-1. the Job is `Running` and the JobStep is the Job's current active step (not stale, not already terminal, not a step not yet reached);
-2. the JobStep is `PreconditionsSatisfied`, or is creating a new Attempt permitted by retry policy (below);
-3. no other Attempt for the same Endpoint is currently in `AwaitingReconciliation` (the endpoint-exclusivity lease is held and uncontested);
-4. all required resource leases for this Attempt are currently held.
+1. the target Endpoint's exclusivity lease is available and is granted to this Job.
+
+**Attempt dispatch** (revalidated immediately before every `ActionDispatch`, including retries — see "Revalidation immediately before dispatch"):
+
+1. the Job is `Running` (not `Cancelling`, not terminal) and the JobStep is the Job's current active step;
+2. required Attempt-scoped resource leases (network/storage/CPU-worker) are held;
+3. for a destructive JobStep, the full destructive-operation authorization precondition set (`docs/specifications/m0-endpoint-identity-lifecycle.md`) holds at this moment;
+4. no unresolved `Indeterminate` Attempt exists for this JobStep without an explicit decision authorizing the new Attempt (operator decision for destructive JobSteps; retry policy for non-destructive JobSteps).
 
 ### Retry policy (fulfills ADR-0005's deferred policy question)
 
-- **Destructive JobSteps**: no automatic retry, under any circumstance, for any Attempt outcome (`Failed`, `Rejected`, or an `AwaitingReconciliation` that resolves to `Unknown`). A further Attempt requires an explicit, recorded operator decision. This is a hard invariant, not a tunable policy (`AGENTS.md`; architecture-redesign.md "Durable workflow"; Issue #4 safety constraints).
-- **Non-destructive JobSteps**: an automatic, bounded retry (a fresh Attempt) is permitted after `Failed` or an `AwaitingReconciliation` that resolves to `Unknown`, at implementation's discretion. Exact retry counts, backoff, and which non-destructive JobStep types opt in are implementation-time tuning, not decided here. This ADR establishes only that automatic retry is *permitted* for non-destructive steps and *never permitted* for destructive ones — the safety-relevant boundary.
-- A `Rejected` Attempt is never treated as `Failed` for retry-policy purposes without explicit consideration — a protocol-level rejection (e.g., unknown `action_type`) often indicates a version/compatibility problem an automatic retry with the same parameters will not fix.
+- **Destructive JobSteps**: no automatic retry, under any circumstance, for any Attempt outcome (`Failed`, `Rejected`, or `Indeterminate`). A further Attempt requires an explicit, recorded operator decision — the same decision that closes a prior uncertain Attempt as `Indeterminate` (see "Reconciliation and the Indeterminate outcome"). This is a hard invariant, not a tunable policy (`AGENTS.md`; architecture-redesign.md "Durable workflow"; Issue #4 safety constraints).
+- **Non-destructive JobSteps**: an automatic, bounded retry (a fresh Attempt) is permitted after `Failed`, and after `Indeterminate` only when that JobStep's retry policy explicitly supports retrying from an indeterminate outcome — non-destructive alone is not sufficient justification, since some non-destructive JobSteps may still have side effects that make a blind retry unsafe. Exact retry counts, backoff, and per-JobStep-type opt-in are implementation-time tuning, not decided here.
+- A `Rejected` Attempt is never treated as `Failed` for retry-policy purposes without explicit consideration — a protocol-level rejection often indicates a version/compatibility problem an automatic retry with the same parameters will not fix.
 
-### Reconciliation after restart or reconnect
+### Job cancellation
 
-On Server restart, every Attempt persisted as `Dispatched` or `InProgress` is loaded as `AwaitingReconciliation`. Once the relevant Agent session is re-established (ADR-0004/ADR-0005 handshake), the Server issues `StatusQuery` for each such Attempt's `action_id`:
-
-- `StatusReport` reports a terminal Agent-action state (`Succeeded`/`Failed`/`Cancelled`) the Server can adopt: the Attempt (and, per retry policy, the JobStep/Job) transitions to the corresponding terminal state.
-- `StatusReport` reports `Running`: the Attempt returns to `InProgress`.
-- `StatusReport` reports `Unknown`, or no Agent session re-establishes within an implementation-defined window: the Attempt remains in `AwaitingReconciliation`; resolution follows the retry policy above (operator-only for destructive JobSteps).
-
-This is never a blind resume: no Attempt leaves `AwaitingReconciliation` without an explicit `StatusReport` (or, for destructive steps, an explicit operator decision) — satisfying the safety constraint that reconciliation "must not blindly resume or replay destructive steps."
+- `Pending` → `Cancelled`: cancellation requested before any JobStep has begun — nothing active to await. Any Endpoint-exclusivity lease already granted is released as part of this transition.
+- `Running` → `Cancelling`: cancellation requested while JobSteps are in progress; `CancelAction` is sent for the currently active Attempt.
+- While `Cancelling`: no new JobStep or Attempt may begin; the active Attempt may still be `InProgress` or `AwaitingReconciliation`.
+  - `CancelAck{outcome: Cancelled}`: the Attempt (and its JobStep) becomes `Cancelled`; the Job proceeds to `Cancelled`.
+  - `CancelAck{outcome: AlreadyCompleted}`: the Attempt's actual, already-determined terminal outcome stands; the Job proceeds to `Cancelled` once that outcome is recorded, since no further JobStep begins.
+  - `CancelAck{outcome: CannotCancel}`: must **not** by itself produce Job `Cancelled`. The Attempt continues to whatever terminal outcome it actually reaches (`Succeeded`/`Failed`); only once that real outcome is known does the Job proceed to `Cancelled` — no further JobStep begins, even though this JobStep itself ran to completion.
+  - `CancelAck{outcome: Unknown}`: requires reconciliation. The Attempt moves through `AwaitingReconciliation` → (`Indeterminate` via explicit decision, or a resolved terminal state) exactly as in the non-cancellation case; the Job remains `Cancelling` until that resolves.
+- `Cancelling` → `Cancelled`: reached only once the workflow is known to have stopped — the active Attempt has reached `Succeeded`, `Failed`, `Cancelled`, `Rejected`, or `Indeterminate` with no further Attempt authorized — and no active or uncertain execution remains. The Job's Endpoint-exclusivity lease is released at this point.
 
 ## Alternatives considered
 
 - **Two-tier model (JobStep only, no Attempt)**: rejected — would require encoding multiple dispatch attempts as ad hoc fields on JobStep itself, duplicating what a first-class `Attempt` entity already expresses cleanly, and `Attempt` is already a named Discovery domain concept this ADR is obligated to give meaning to.
 - **DAG/branching JobStep graph**: rejected for M0 — no current requirement or evidence describes branching or parallel JobSteps within one Job; a linear sequence is the smallest structure that satisfies "each relevant provisioning stage is a JobStep."
 - **Single fixed global concurrency limit**: rejected — explicitly excluded by architecture-redesign.md.
-- **Releasing all lease types (including endpoint exclusivity) immediately on connection loss**: rejected — would allow a second JobStep to be dispatched against an Endpoint whose true state is unknown, undermining the destructive-operation preconditions (ADR-0004).
+- **Attempt/JobStep-scoped endpoint exclusivity (the initially accepted design)**: superseded on owner review — did not match the actual M0 requirement (no interleaving of two active Jobs against one Endpoint) and left a narrower safety margin than Job-scoped exclusivity, which is both simpler and strictly safer for that requirement.
+- **Treating `StatusReport{Unknown}` as an immediate, automatic terminal outcome (originally, remaining in `AwaitingReconciliation` indefinitely with implicit retry eligibility)**: rejected on owner review — collapsed a case requiring explicit judgment into an ambiguous default; `Indeterminate` makes the "we do not know" outcome a first-class, explicit, terminal record instead.
+- **Immediate Job `Cancelled` on cancellation request**: rejected on owner review — a cancellation request is not proof execution stopped; `Cancelling` makes the uncertainty window explicit and durable rather than assuming success.
 - **Automatic retry for destructive JobSteps with a "confirm before executing" safeguard**: considered and rejected as a design pattern for M0 — the repository's safety policy is unconditional on this point, and introducing any automatic-retry code path for destructive steps, even a gated one, was judged more likely to leak dangerous behavior later than not having the code path at all.
 
 ## Consequences
 
-- Issue #5 (persistence, observability, and domain-event model) must persist Job, JobStep, and Attempt durably enough to survive restart and support the reconciliation procedure above; this ADR does not choose the persistence technology.
-- Issue #5's domain-event model will likely reference Job/JobStep/Attempt state transitions as event sources; this ADR does not define specific domain events.
-- Issue #6 (data-plane and storage contracts) JobSteps that perform transfers must fit within this Attempt model; this ADR does not define transfer-specific preconditions or postconditions.
-- Issue #7 (Simulator) must be able to simulate `AwaitingReconciliation` scenarios (disconnect mid-Attempt, Server restart with in-flight Attempts, `Unknown` `StatusReport`) as first-class scenarios, not edge cases.
+- Issue #5 (persistence, observability, and domain-event model) must persist Job (including `Cancelling`), JobStep, and Attempt (including `Indeterminate`) durably enough to survive restart and support the reconciliation procedure above; this ADR does not choose the persistence technology.
+- Issue #5's domain-event model will likely want an event for "Attempt became Indeterminate" as an operator-notification source, and will likely reference other Job/JobStep/Attempt transitions as event sources; this ADR does not define specific domain events.
+- Issue #6 (data-plane and storage contracts) JobSteps that perform transfers must fit within this Attempt model, including revalidation immediately before dispatch; this ADR does not define transfer-specific preconditions or postconditions.
+- Issue #7 (Simulator) must be able to simulate `AwaitingReconciliation`, `Indeterminate` resolution, `Cancelling`, and Job-scoped exclusivity contention as first-class scenarios, not edge cases.
+- The Scheduler's admission logic (Job `Pending` → `Running`) owns endpoint-exclusivity arbitration exclusively; JobStep/Attempt-level dispatch logic no longer acquires or releases it. A Job that cannot obtain its Endpoint's exclusivity lease queues in `Pending`; fairness/ordering among queued Jobs contending for the same Endpoint remains implementation-time, not decided here.
 - Any future partial-failure/skip semantics for Jobs, or a branching JobStep structure, requires a new ADR or Specification update rather than silent implementation-time extension.
 
 ## Related architecture
@@ -116,4 +150,4 @@ This is never a blind resume: no Attempt leaves `AwaitingReconciliation` without
 - Issue #3 / ADR-0005 — Agent Protocol v1 (action states, retry mechanism, `StatusQuery`).
 - Issue #5 — `[WP] Define persistence, observability, and domain-event model` (durability of Job/JobStep/Attempt; domain events).
 - Issue #6 — `[WP] Define data-plane and storage contracts` (transfer JobSteps fit this model).
-- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate reconciliation scenarios).
+- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate reconciliation and cancellation scenarios).
