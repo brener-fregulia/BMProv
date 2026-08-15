@@ -1,6 +1,6 @@
 # M0 — Persistence, Observability, and Domain-Event Model
 
-Status: **Proposed - awaiting owner approval**
+Status: **Approved**
 
 ## Context
 
@@ -95,8 +95,8 @@ Durable audit records exist for two categories of safety-relevant activity, alig
 **Destructive execution**, required by ADR-0007 and not previously made explicit in this Specification:
 
 - the authorization/decision enabling a destructive dispatch, where applicable (e.g., the operator decision authorizing a retry after `Indeterminate` — the same record as above, linked to the dispatch it authorizes);
-- the destructive Action dispatch itself (`ActionDispatch` for a destructive JobStep's Attempt);
-- its known terminal outcome (`Succeeded`/`Failed`/`Cancelled`/`Rejected`) or its `Indeterminate` resolution.
+- the destructive dispatch **commitment** — the durable record that the Server authorized and durably committed that Attempt for transmission (`docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md` "Crash-safe dispatch persistence ordering"). This record represents the Server's own committed decision, not confirmation that the `ActionDispatch` frame was actually transmitted or received — a crash can occur after this commit and before transmission is attempted. Actual Agent-side knowledge of the action remains represented by the existing Agent Protocol lifecycle (`ActionAck`, `ActionResult`, `StatusQuery`/`StatusReport`) and the Attempt's reconciliation transitions, not by a second audit record;
+- its known terminal outcome (`Succeeded`/`Failed`/`Cancelled`/`Rejected`) or its `Indeterminate` resolution, once established through that Agent Protocol lifecycle.
 
 An audit record is durable, immutable once written, and carries the correlation fields above. Actor attribution distinguishes an **operator actor** (a human decision, when operator identity is available) from a **system actor** (e.g., an automatic non-destructive retry per JobStep retry policy) where the distinction is known. This Specification does not define the operator-identity/authentication model itself (an Administrative API concern, not yet a dedicated M0 Work Package) — it only establishes that these records must be durably and immutably kept, with whichever actor information is available at the point of recording.
 
@@ -138,7 +138,7 @@ Per "Unit and domain tests": atomic-transaction tests demonstrating that a domai
 
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
-Manual: owner approval of this Specification.
+Manual: owner approval of this Specification — confirmed (see Status).
 
 ## Related ADRs
 
@@ -163,4 +163,4 @@ Manual: owner approval of this Specification.
 3. Telemetry retention/aggregation policy, if any — implementation-time.
 4. Exact `transfer_id` semantics — Issue #6.
 
-Status: Proposed - awaiting owner approval.
+Status: Approved.
