@@ -189,61 +189,158 @@ customer bare-metal hardware.
 
 ## Candidate B — direct UEFI `db`/PK enrollment
 
-**Evidence for this candidate is incomplete** — the mechanism's ESL-construction and
-host-level NVRAM-reset steps were demonstrated; the actual variable-write step via
-guest-side standard tooling was not completed in this round. Reported honestly as a
-partial result per Issue #14's explicit allowance for this.
+This round completed Candidate B to the same evidentiary rigor as Candidate A, via
+`KeyTool.efi` (Preferred path A: an efitools EFI application, no Linux userspace
+involved) — superseding the previous round's blocked `efi-updatevar`/BusyBox attempt,
+preserved below only as resolved context. That earlier finding stands as recorded:
+`efi-updatevar` failed on `mount: invalid option -- 'l'` because BusyBox's minimal
+`mount` lacks GNU `mount -l`, which `efi-updatevar` shells out to internally — an
+environment-tooling dependency, not a demonstrated mechanism failure. No further time
+was spent patching BusyBox/initramfs internals to rescue that path, per instruction.
 
-### What was established
+### Method: preserving Microsoft trust while adding a site key
 
-- `VBoxManage modifynvram <vm> inituefivarstore` resets the VM's UEFI variable store
-  to a blank state (`SecureBoot` reports `off` immediately afterward) — the
-  virtualized analogue of a real firmware's "Clear Secure Boot keys" / enter Custom
-  Setup Mode action, which on physical hardware requires interactive firmware
-  Setup-menu access.
-- `VBoxManage modifynvram <vm> enrollpk [--platform-key=FILE]` and `enrollmok
-  [--mok=FILE]` exist as **host-side, out-of-band, unauthenticated** NVRAM-injection
-  commands. These are a genuine convenience for lab/CI automation of *this specific
-  hypervisor* but have **no physical-hardware equivalent** — no OEM firmware exposes
-  an external host tool that can write Secure Boot variables from outside the
-  machine. Flagged explicitly as a virtualization-only artifact, not evidence
-  transferable to physical Endpoints.
-- `efitools 1.9.2-3ubuntu3` (`cert-to-efi-sig-list`, `sign-efi-sig-list`,
-  `efi-updatevar`, and the interactive `KeyTool.efi` family) installs cleanly and
-  provides the standard guest-side tooling path. `cert-to-efi-sig-list` requires a
-  **PEM**-encoded certificate — an initial attempt using the DER-encoded `MOK.der`
-  silently produced a near-empty (44-byte) signature list with no cert data; using
-  the already-available `MOK.pem` produced a correctly-sized (863-byte) EFI
-  Signature List.
+1. Before resetting NVRAM, dumped the VM's existing Microsoft/Oracle `db`, `KEK`,
+   `PK` content directly from the live variable store
+   (`VBoxManage modifynvram <vm> queryvar --name db|KEK|PK --filename …`):
+   `ms-db.bin` (7636 bytes, 5 Microsoft signature entries), `ms-kek.bin` (3066 bytes),
+   `ms-pk.bin` (1035 bytes).
+2. In WSL2: built an EFI Signature List for the same "Bamep Site Test Trust Anchor"
+   test key reused from Candidate A (`cert-to-efi-sig-list -g <GUID> MOK.pem
+   bamep-own.esl`, 863 bytes).
+3. Concatenated (`EFI_SIGNATURE_LIST` is self-delimiting, so lists concatenate
+   safely): `db-combined.esl` = `ms-db.bin` + `bamep-own.esl` (8499 bytes);
+   `kek-combined.esl` = `ms-kek.bin` + `bamep-own.esl` (3929 bytes). `PK` cannot be
+   combined — UEFI defines `PK` as single-valued — so `pk-own.esl` = `bamep-own.esl`
+   alone, a **necessary replacement, recorded here explicitly and not a claim about
+   any desired production configuration.**
+4. Self-signed all three as authenticated update files:
+   `sign-efi-sig-list -c MOK.pem -k MOK.priv <VarName> <in.esl> <out.auth>` →
+   `db.auth` (9765 B), `KEK.auth` (5195 B), `PK.auth` (2129 B).
+5. Reset the VM's NVRAM to Setup Mode (`VBoxManage modifynvram <vm>
+   inituefivarstore`; `SecureBoot` reported `off` immediately).
+6. Built a boot disc with the **stock, unsigned** `KeyTool.efi` (from `efitools
+   1.9.2-3ubuntu3`) as `\EFI\Boot\BOOTX64.EFI` plus the three `.auth` files, and
+   booted it directly — no shim, no MOK, no Linux userspace anywhere in this path.
 
-### What blocked completion
+### Enrollment ceremony (observed exactly)
 
-`efi-updatevar -f bamep.esl db` (and `KEK`) consistently failed with `mount: invalid
-option -- 'l'` inside the disposable `initramfs`-only environment. This traces to
-`efi-updatevar` internally invoking `mount -l` (a GNU/util-linux-specific option) to
-introspect mount state — an option BusyBox's minimal `mount` applet (the only `mount`
-available in this environment) does not implement. An attempted compatibility shim
-(a wrapper script placed ahead of BusyBox's `mount` on `PATH`, rebuilt into the
-initramfs) did not resolve the failure within this round's time budget, most likely
-because `initramfs-tools`' own core scripts re-establish BusyBox's `mount` applet
-after custom hooks run. This is an **environment-tooling dependency finding, not a
-demonstrated mechanism failure**: `efi-updatevar` (unlike `mokutil`, which has no such
-dependency) assumes a more complete userspace than a minimal disposable boot
-environment provides.
+`KeyTool.efi` booted immediately — unsigned execution is permitted while in Setup
+Mode — and its own main menu self-reported `Platform is in Setup Mode` / `Secure Boot
+is off`. From `Edit Keys` → `Select Key to Manipulate`:
+
+1. **KEK** → `Add New Key` → browse to the CD-ROM device → `KEK.auth` → applied
+   silently, no error, no reboot.
+2. **db** → `Add New Key` → same file browser → `db.auth` → applied silently, no
+   reboot.
+3. **PK** → only `Replace Key(s)` is offered (`PK` is single-valued; KeyTool itself
+   shows `WARNING: Setting PK will take the platform out of Setup Mode`) → browse →
+   `PK.auth` → applied silently.
+4. Backing out to the KeyTool main menu — **no reboot anywhere in this sequence** —
+   immediately reported `Platform is in User Mode` / `Secure Boot is on`.
+
+**Zero reboots were required for the entire `db`+`KEK`+`PK` enrollment.** This is a
+material difference from Candidate A's fixed 2-reboot cost. The whole ceremony was:
+boot once, then ~3 repeated menu actions (select variable → Add/Replace → browse
+device → browse directory → select file), each applied live.
+
+### Functional verification: does firmware now trust the key directly?
+
+- A minimal EFI binary signed with the site test key (Candidate A's SBAT-compliant
+  `test-signed-v2.efi`, reused unmodified) was placed directly as
+  `\EFI\Boot\BOOTX64.EFI` — **no shim involved at all**. It booted cleanly (reached
+  `grub>`, no rejection), confirming firmware itself — not merely shim — now trusts
+  the site key via `db`. This path is structurally simpler than Candidate A's: SBAT
+  is a shim-specific policy layer, and firmware's own Secure Boot check does not
+  enforce it.
+- **Preserved Microsoft-trusting capability, confirmed functionally**: with the
+  combined `db`/`KEK`/`PK` active, the original, completely unmodified Issue #10
+  Scenario-3 disc (Microsoft-signed shim → Canonical-signed GRUB, no MOK involved)
+  was booted again and **still succeeded cleanly**. Adding a site key via this path
+  did not break the already-proven Microsoft-trusting boot path — direct evidence
+  for Issue #14 §2's "preserve where practical" instruction.
+
+### Revocation
+
+Once `PK` is set (User Mode), further `db`/`KEK` changes require an **authenticated**
+update — unauthenticated writes stop being accepted. A second, unprompted finding
+surfaced here: **the stock, unsigned `KeyTool.efi` was itself rejected by firmware**
+once `PK` was set (`Access Denied`, the same firmware-level rejection observed in
+Issue #10's Scenario 2) — once enforcement is active, even the management tool must
+itself be trusted (signed by a `db`-trusted key) to run again. Signing `KeyTool.efi`
+with the same site test key (`sbsign` — valid because that key is already in `db`)
+restored the ability to run it.
+
+Using the signed `KeyTool.efi`:
+
+1. Built an authenticated `db` update reverting `db` to the original 5 Microsoft
+   entries only (`sign-efi-sig-list -c MOK.pem -k MOK.priv db ms-db.bin
+   db-revoke.auth`) — signed by the site key, valid because that key is a member of
+   `KEK`.
+2. `Edit Keys` → `db` (the live list correctly displayed all 5 Microsoft entries plus
+   the 1 site-key entry) → `Replace Key(s)` → browsed to `db-revoke.auth` → applied
+   silently, no reboot. Re-entering `db` confirmed only the 5 Microsoft entries
+   remained.
+3. Rebooted into the site-key-signed test binary directly as `BOOTX64.EFI` (no
+   shim) — **rejected again** (`Access Denied`, firmware-level — identical signature
+   to the pre-enrollment baseline).
+4. Rebooted into the unmodified Issue #10 Scenario-3 shim+GRUB disc — **still
+   succeeded**, confirming the Microsoft/Canonical entries were untouched by the
+   site-key revocation.
+
+**Full enroll → verify-accept → preserve-Microsoft-trust → revoke → verify-reject
+lifecycle confirmed, at a cost of zero reboots for enrollment and zero reboots for
+revocation** — each a single boot session with several interactive menu selections,
+no boot cycling required between `db`/`KEK`/`PK` writes.
+
+### Firmware-state prerequisites (recorded exactly, per Issue #14 §3)
+
+- **Setup Mode is required** to write `db`/`KEK`/`PK` unauthenticated for the first
+  time. In this lab, Setup Mode was reached via `VBoxManage modifynvram
+  inituefivarstore` — a **host-side, out-of-band action with no physical-Endpoint
+  equivalent**, and per Issue #14 §3 this does **not** count as evidence of an
+  automatable physical workflow. What Setup Mode corresponds to on real OEM
+  firmware — factory-default state, or an interactive firmware "Clear Secure Boot
+  Keys"/Custom Mode menu action — was **not tested**. This is the single largest
+  open question for physical portability of this candidate.
+- **No reboot is required before the variable writes** — `KeyTool.efi` operates live
+  once already running with Setup Mode active.
+- **No reboot is required between or after the `db`/`KEK` writes** while still in
+  Setup Mode.
+- **Setting `PK` transitions Setup Mode → User Mode immediately and live, with no
+  reboot** — Secure Boot enforcement activates instantly, observed directly on
+  KeyTool's own status line.
+- **After User Mode is active, further `db`/`KEK` changes require an authenticated
+  (signed) update file** — unlike Candidate A, where `mokutil`'s request-staging step
+  never requires any signing at all.
+- **After User Mode is active, the management tool itself must be signed by a
+  trusted key to keep running** — the stock unsigned `KeyTool.efi` build stopped
+  working the moment enforcement activated.
+
+**What the tool automates vs. what must happen first:** `KeyTool.efi` automates
+applying an already-prepared, correctly-formatted `.esl`/`.auth` file to a variable,
+live, with no reboot. It does **not** automate, and cannot itself provide, reaching
+Setup Mode in the first place — that precondition sits entirely outside the tool,
+and on physical hardware is understood (not evidenced here) to require either a
+factory-fresh machine or an interactive firmware action.
 
 ### Not attempted this round
 
-`KeyTool.efi` — the interactive, pre-boot EFI application shipped by `efitools` that
-performs the same `db`/KEK/PK enrollment without depending on any Linux userspace
-`mount` at all. This is arguably the more direct real-firmware equivalent of
-"standard EFI tooling" per Issue #14's framing (closer to what an integrator would
-actually use, and structurally similar to shim's own `mmx64.efi` MOK Manager
-ceremony already characterized under Candidate A). It remains a concrete, well-scoped
-next step if Candidate B needs to be revisited with further evidence.
+`UpdateVars.efi` — the non-interactive companion EFI application (applies
+`PK.auth`/`KEK.auth`/`db.auth` automatically, by filename convention, with no menu
+navigation) was not exercised. Its documented invocation takes command-line
+arguments (`UpdateVars <VarName> <file>`), which needs a UEFI Shell environment (not
+built in this round) rather than a plain chainloaded `BOOTX64.EFI`. `KeyTool.efi`'s
+interactive path was used instead as the simplest, least-artificial option available,
+per Issue #14 §1, and required no UEFI Shell. `UpdateVars.efi` remains a concrete,
+well-scoped next step if a fully non-interactive Candidate B ceremony needs to be
+evidenced — Issue #14 §6 stops experimentation here regardless.
 
 ## Operational evaluation
 
-Based on Candidate A, the only candidate completed to the same rigor as Issue #10:
+Both candidates were completed to comparable evidentiary rigor this round.
+
+### Candidate A (shim/MOK)
 
 - **Per-Endpoint cost is real and does not amortize across a fleet.** Staging the
   request (`mokutil --import`) must run *on* the target Endpoint itself against its
@@ -261,62 +358,113 @@ Based on Candidate A, the only candidate completed to the same rigor as Issue #1
   firmware) and by full NVRAM-store resets. Losing or rotating the site key requires
   re-running the full per-Endpoint interactive ceremony again on every affected
   Endpoint.
-- **Distinguishing the four framings Issue #14 requires:**
-  - *Technically possible*: **yes** — demonstrated end-to-end, including functional
-    accept/reject verification and clean revocation.
-  - *Automatable*: **partially** — every step except the MokManager confirmation
-    screen is scriptable; the confirmation screen itself requires equivalent
-    out-of-band keyboard/console-injection capability per Endpoint.
-  - *Unattended (zero interactive console touch per Endpoint)*: **no** — not
-    demonstrated; the evidence shows an unavoidable interactive step in the
-    mechanism as it exists in shim 15.8.
-  - *Operationally acceptable at Bamep's V1 target scale*: **not established by this
-    Spike** — that remains an owner judgment. The evidence gathered here is
-    consistent with the operational-cost concern already recorded (but not
-    evidenced) in `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`
-    ("(B) Site trust-anchor provisioning").
+
+### Candidate B (direct `db`/PK)
+
+- **Per-Endpoint cost is also real and does not amortize**, for a different reason:
+  every Endpoint still needs its own boot-time interactive ceremony (there is no
+  remote/centralized way to write another machine's firmware NVRAM), but the
+  ceremony itself is cheaper once underway — zero reboots for the full `db`+`KEK`+`PK`
+  enrollment, versus Candidate A's fixed 2 reboots.
+- **The Setup Mode precondition dominates the real cost and was not resolved by this
+  Spike.** Reaching Setup Mode was done here via a host-side, VirtualBox-only
+  command with no physical-Endpoint equivalent. Whether an arbitrary previously
+  unprepared OEM Endpoint can reach Setup Mode without interactive firmware-menu
+  access remains unknown — this is the decisive open question, not the enrollment
+  mechanics themselves.
+- **At 3–5 or 20–24 Endpoints**: the same per-Endpoint, non-amortizing shape as
+  Candidate A applies to *reaching Setup Mode plus running the ceremony*; only the
+  ceremony portion is cheaper (no reboot cycling).
+- **Recovery/rotation**: `db`/`KEK` state is Endpoint-firmware-NVRAM-resident, same
+  tie as MOK. Once `PK` is owned by the site key, *routine* `db`/`KEK` rotation no
+  longer needs Setup Mode at all — an authenticated update signed by the existing
+  `KEK` suffices (demonstrated directly: the revocation step was a live, no-reboot,
+  authenticated `db` replace). This is a genuine operational advantage over Candidate
+  A once initial enrollment is complete: post-enrollment key lifecycle management
+  does not require re-entering Setup Mode or physical/console access again, only a
+  correctly-signed update file transported to the machine.
+- **A previously-unrecorded cost specific to this candidate**: once Secure Boot
+  enforcement is active, the management tool itself must be signed by a trusted key
+  to keep running — an unsigned `KeyTool.efi`/`UpdateVars.efi` stops working the
+  moment `PK` is set, so ongoing management requires maintaining a signed copy of
+  whatever tool performs future updates.
+
+### Distinguishing the four framings Issue #14 requires (both candidates)
+
+|                                                              | Candidate A (MOK)        | Candidate B (direct `db`/PK) |
+| ------------------------------------------------------------ | ------------------------- | ------------------------------ |
+| Technically possible                                          | **Yes** — full enroll/accept/revoke/reject cycle demonstrated | **Yes** — full enroll/accept/preserve-MS-trust/revoke/reject cycle demonstrated |
+| Automatable *after* required firmware state is reached        | Partially — everything but the MokManager confirmation screen | Everything — `KeyTool.efi` ceremony itself needs no reboot, and `UpdateVars.efi` (untested) is plausibly non-interactive once Setup Mode is reached |
+| Unattended from a previously unprepared Endpoint               | **No** — not demonstrated; MOK enrollment interaction is unavoidable in shim 15.8 | **Not established** — reaching the required Setup Mode precondition was not tested on anything but a VirtualBox host-side shortcut; whether an arbitrary unprepared OEM Endpoint can reach Setup Mode unattended is unknown |
+| Operationally acceptable for 3–5 Endpoints                    | Owner judgment; survivable manual/KVM-scripted cost | Owner judgment; same per-Endpoint shape, cheaper ceremony |
+| Operationally acceptable for 20–24 Endpoints                  | Owner judgment; identical repeated interactive cost, does not amortize | Owner judgment; identical repeated Setup-Mode-reach cost, does not amortize; post-enrollment rotation is cheaper than Candidate A |
+
+**Directly answering Issue #14's central question — can Bamep take an arbitrary
+previously-unprepared OEM UEFI Endpoint and establish this site key without
+per-machine console/firmware intervention?** — **the evidence cannot establish that**,
+for either candidate. Both require some form of per-Endpoint interactive access (a
+console/keyboard ceremony for MOK; reaching Setup Mode, by an unverified means, for
+direct `db`/PK). Candidate B's *ceremony* is measurably cheaper and its
+*post-enrollment* rotation/revocation story is materially better than Candidate A's,
+but this Spike did not — and, per Issue #14 §6, will not — determine whether an
+arbitrary unprepared OEM Endpoint can reach the Setup Mode precondition without
+equivalent console/firmware intervention. That gap is isolated below as required
+future Integration Environment validation, consistent with the already-recorded
+operational-cost concern in
+`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`
+("(B) Site trust-anchor provisioning").
 
 ## Conclusion
 
-Candidate A (shim/MOK enrollment) is **technically viable and was fully validated
-end-to-end** in this virtualized environment: enrollment, functional trust
-verification (including the previously-unrecorded SBAT-compliance requirement),
-persistence across reboot and power cycles, and clean revocation all behaved
-correctly and reproducibly. It is **not unattended-automatable** in the sense
-Bamep's target bare-metal provisioning model would want — it requires a genuine
-interactive keyboard ceremony per Endpoint, catchable only via physical presence or
-an equivalent out-of-band remote-console capability, at a fixed 2-reboot cost that
-repeats identically at 3–5 or 20–24 Endpoints and again on every future key
-rotation/recovery event.
+Both Candidate A (shim/MOK) and Candidate B (direct UEFI `db`/PK) are **technically
+viable and were fully validated end-to-end** in this virtualized environment:
+enrollment, functional trust verification, persistence, and clean revocation all
+behaved correctly and reproducibly for both. Neither is **unattended-automatable**
+from a previously unprepared Endpoint in the sense Bamep's target bare-metal
+provisioning model would want:
 
-Candidate B (direct `db`/PK enrollment) evidence is **incomplete**: the host-side
-NVRAM-reset and guest-side ESL-construction steps were demonstrated, but the actual
-`db`/KEK variable write via standard guest-side tooling (`efi-updatevar`) was blocked
-by an environment-specific tooling dependency (BusyBox `mount` lacking `-l` support)
-in the disposable Linux environment used, not by a demonstrated mechanism failure.
-`KeyTool.efi` remains an untested, more directly comparable alternative path.
+- Candidate A requires a genuine interactive keyboard ceremony per Endpoint,
+  catchable only via physical presence or an equivalent out-of-band remote-console
+  capability, at a fixed 2-reboot cost that repeats identically at 3–5 or 20–24
+  Endpoints and again on every future key rotation/recovery event.
+- Candidate B requires reaching a Setup Mode firmware precondition whose
+  physical-Endpoint accessibility this Spike could not evidence (only a
+  VirtualBox-only host-side shortcut was available), but once that precondition is
+  met, the enrollment/revocation ceremony itself is cheaper (zero reboots) and,
+  materially, **post-enrollment key rotation/revocation no longer needs Setup Mode
+  at all** — an authenticated update signed by the already-owned `KEK` suffices,
+  live, with no reboot. This is a real operational advantage over Candidate A for
+  the ongoing-management portion of the lifecycle, independent of the still-open
+  initial-access question.
 
 Per Issue #14's own evaluation criteria, this Spike does not need to find an
-acceptable candidate. The evidence gathered for Candidate A supports — without this
-Spike making the decision itself — the framing that **a pre-established per-Endpoint
-trust-anchor mechanism requiring interactive console access is technically sound but
-carries a real, non-amortizing per-Endpoint operational cost** at Bamep's target
-scale. Whether that cost is acceptable for V1, and whether Candidate B (or
-`KeyTool.efi` specifically) changes this picture, remain open questions for owner
-review, informed by but not resolved by this Spike.
+acceptable candidate, and per §6 this is the final experimental round. The evidence
+supports — without this Spike making the decision itself — the following framing:
+**both tested pre-established-trust mechanisms are technically sound, and both
+carry a real, non-amortizing per-Endpoint operational cost at initial-enrollment
+time; Candidate B is materially less interactive during enrollment and
+meaningfully better for ongoing key-lifecycle management after initial
+enrollment, but this Spike could not establish whether either candidate's
+initial per-Endpoint interactive requirement can be eliminated on arbitrary,
+previously-unprepared OEM hardware.** Whether either cost is acceptable for V1
+remains an owner judgment, informed by but not resolved by this Spike.
 
 ## Remaining uncertainty
 
 - **This is virtualized-firmware evidence** (VirtualBox's representative
   Microsoft-trusting default configuration), **not physical Integration-Environment
-  evidence** — real OEM firmware's MokManager implementation, exact keyboard/timing
-  behavior, and SBAT/revocation policy version may differ. Physical validation
-  remains required before any production conclusion, consistent with
-  `docs/development/testing.md`.
-- **Candidate B's core mechanism (does firmware actually accept and enforce a
-  directly db-enrolled key at boot) was not empirically confirmed or refuted** in
-  this round — only its ESL-construction and NVRAM-reset preconditions were.
-  `KeyTool.efi` was not attempted.
+  evidence** — real OEM firmware's MokManager and Setup Mode implementations, exact
+  keyboard/timing behavior, and SBAT/revocation policy version may differ. Physical
+  validation remains required before any production conclusion, consistent with
+  `docs/development/testing.md`. This is now isolated as the single concrete item
+  for future Integration Environment validation: **whether an arbitrary,
+  previously-unprepared OEM Endpoint can reach UEFI Setup Mode (for Candidate B) or
+  complete the MokManager ceremony (for Candidate A) without physical presence or an
+  equivalent out-of-band remote-console/BMC capability.**
+- **`UpdateVars.efi` (Candidate B's non-interactive companion tool) was not
+  exercised** — it requires a UEFI Shell environment not built in this round;
+  `KeyTool.efi`'s interactive path was used instead and fully answered the
+  mechanism-level questions this Spike required.
 - **No labor-time estimate is offered** — only measured interaction/reboot counts,
   per Issue #14's explicit instruction not to invent time estimates without
   measured evidence.
@@ -325,8 +473,13 @@ review, informed by but not resolved by this Spike.
   timing measurement was not pursued as it does not change the qualitative
   automation-ceiling finding.
 - **Revocation/recovery mechanics for a *lost* (not merely rotated) site key** were
-  not evaluated — only the interactive `mokutil --delete` path with the original key
-  still available.
+  not evaluated for either candidate — only the case where the original key
+  material remains available to authorize its own replacement/deletion.
+- Per Issue #14 §6, this Spike does not extend to other hypervisors, other firmware
+  implementations, TPM/measured boot, Microsoft signing arrangements, vendor
+  enterprise tooling, or physical hardware. The physical-firmware portability
+  boundary noted above is the one item explicitly carried forward, not resolved
+  here.
 
 ## Related work
 
