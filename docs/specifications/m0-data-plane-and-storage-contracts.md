@@ -40,23 +40,42 @@ A manifest is not necessarily complete when a capture begins — requiring the c
 
 ## Transfer-session authentication
 
-Accepted (ADR-0008 point 9, executing Issue #15): every data-plane transfer is authorized and authenticated by a **short-lived, transfer-scoped, Server-signed bearer capability**, delivered over the already-authenticated Agent Protocol control-plane channel and presented on the HTTPS data-plane channel. This section is the full operational contract; ADR-0008 records the decision and its rationale.
+Accepted (ADR-0008 point 9, executing Issue #15): every data-plane transfer is authorized and authenticated by a **short-lived, transfer-scoped, sender-constrained capability** — a Server-signed capability bound to an ephemeral Agent-held asymmetric proof key, never a plain bearer capability — delivered over the already-authenticated Agent Protocol control-plane channel and presented, together with a fresh per-request proof of possession, on the HTTPS data-plane channel. This section is the full operational contract; ADR-0008 records the decision and its rationale, including why a plain bearer capability was evaluated and rejected.
+
+**The capability alone must not authorize a data-plane request.** Possession of a stolen capability, without the corresponding ephemeral private proof key, must be insufficient to use it.
 
 ### Transport
 
-The data plane is **HTTPS**, not plain HTTP. Server identity reuses the same pinned Server TLS certificate/fingerprint already authenticated for the Agent Protocol WSS connection via trusted bootstrap (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`, `docs/decisions/0011-site-trust-anchor-operator-verified-pairing.md`) — no second trust relationship is introduced, and no new site trust-anchor question is reopened. The Agent does not present a client certificate; the data plane is not mTLS, consistent with Agent Protocol (`m0-agent-protocol-contract.md` "Transport and handshake").
+The data plane is **HTTPS**, not plain HTTP. Server identity reuses the same pinned Server TLS certificate/fingerprint already authenticated for the Agent Protocol WSS connection via trusted bootstrap (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`, `docs/decisions/0011-site-trust-anchor-operator-verified-pairing.md`) — no second trust relationship is introduced, and no new site trust-anchor question is reopened. The Agent does not present a client certificate; the data plane is not mTLS, consistent with Agent Protocol (`m0-agent-protocol-contract.md` "Transport and handshake") — sender-constraint is achieved at the application level (below), not via mTLS.
+
+### Ephemeral proof key
+
+For a transfer-authorization context:
+
+1. the already-authenticated Agent generates an asymmetric ephemeral keypair;
+2. the private key remains Agent-local, in memory only, and is never persisted;
+3. it is **never** an Endpoint identity credential and is **never** persisted as durable Endpoint identity/trust state (`docs/specifications/m0-endpoint-identity-lifecycle.md` is not extended or reinterpreted by this key);
+4. `TransferAuthorizationRequest` supplies the public key, or a canonical representation sufficient for the Server to derive its cryptographic thumbprint;
+5. the Server-issued capability binds to that key's thumbprint.
+
+The concrete asymmetric algorithm and serialization are implementation-time choices, provided the resulting representation is explicit and interoperable. The capability-signing mechanism (Server-held signing secret, point 4 of ADR-0008 point 9) and the proof-key algorithm do **not** need to be the same.
+
+The ephemeral key's own lifetime is intentionally bounded to what the authorization context needs — never longer than the owning transfer's active lifetime, and typically shorter, since it is lost on any Agent process restart (see "Reconnect and restart behavior").
 
 ### Authorization bindings
 
-One authorization capability is bound to exactly:
+One sender-constrained capability is bound to exactly:
 
 - `endpoint_id`;
 - `transfer_id`;
 - `artifact_id`;
 - direction (Agent → Server, or Server → Agent);
-- `attempt_id` of the transfer JobStep's Attempt (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`) that caused it to be issued.
+- `attempt_id` of the transfer JobStep's Attempt (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`) that caused it to be issued;
+- authorization expiry / bounded lifetime;
+- the proof-key thumbprint (see "Ephemeral proof key" above);
+- a unique capability identifier or equivalent cryptographic identity sufficient for proof binding (see "Per-request proof of possession" below).
 
-No other identifier is bound merely because it exists — `job_id`/`jobstep_id` are reachable transitively through `attempt_id` and are not separately embedded. A capability authorizes only the exact `(endpoint_id, transfer_id, artifact_id, direction)` tuple it was issued for; it never authorizes another transfer, another Artifact, the opposite direction, or another Endpoint, even for the same Agent session.
+No other identifier is bound merely because it exists — `job_id`/`jobstep_id`/`action_id` are reachable transitively through `attempt_id` and are not separately embedded, since they provide no independently necessary authorization property beyond it. A capability authorizes only the exact `(endpoint_id, transfer_id, artifact_id, direction)` tuple it was issued for, presented together with proof of possession of its bound key; it never authorizes another transfer, another Artifact, the opposite direction, or another Endpoint, even for the same Agent session, and it is not a generic data-plane credential.
 
 ### Issuance sequence
 
@@ -68,80 +87,131 @@ No other identifier is bound merely because it exists — `job_id`/`jobstep_id` 
    artifact_id, direction, ...}} — unchanged Job/Attempt dispatch flow
    (ADR-0006, ADR-0007 persist-before-send), no special-casing.
 3. Agent sends ActionAck{outcome: Accepted}.
-4. Agent sends TransferAuthorizationRequest{transfer_id} over the
-   already-authenticated control-plane connection.
-5. Server checks: does a non-terminal Attempt exist for this
+4. Agent generates an ephemeral asymmetric proof keypair (or reuses
+   one already held for this transfer_id, see "Renewal").
+5. Agent sends TransferAuthorizationRequest{transfer_id,
+   proof_public_key} over the already-authenticated control-plane
+   connection.
+6. Server checks: does a non-terminal Attempt exist for this
    transfer_id, bound to the requesting Endpoint's identity/session,
    and is the Endpoint's credential CredentialActive?
      - yes → TransferAuthorizationGrant{transfer_id, token, expires_at}
+             where token is bound to proof_public_key's thumbprint
      - no  → TransferAuthorizationDenied{transfer_id, reason}
-6. Agent opens the HTTPS data-plane connection and presents the token
-   with each chunk request alongside transfer_id/artifact_id.
-7. Server revalidates the token and current durable state on every
-   chunk request (see "Chunk-request revalidation" below); on success,
-   chunk transfer proceeds exactly as already specified in "Chunk
-   transfer" above.
-8. If the token expires, or the Agent no longer holds it (e.g. after
-   an Agent process restart) while the underlying transfer remains
-   legitimately active, the Agent repeats step 4 for the same
-   transfer_id — a renewal, never a new Attempt and never a new
-   transfer_id.
+7. Agent opens the HTTPS data-plane connection; each chunk request
+   carries the capability (token) plus a fresh proof, signed by the
+   ephemeral private key, of possession of the key the capability is
+   bound to (see "Per-request proof of possession").
+8. Server verifies the capability, the proof, and current durable
+   state on every chunk request (see "Per-request verification"
+   below); on success, chunk transfer proceeds exactly as already
+   specified in "Chunk transfer" above.
+9. If the capability expires, or the Agent no longer holds a usable
+   key/capability pair (e.g. after an Agent process restart), while
+   the underlying transfer remains legitimately active, the Agent
+   repeats steps 4–5 for the same transfer_id — a renewal, never a
+   new Attempt and never a new transfer_id.
 ```
 
-`TransferAuthorizationRequest`/`TransferAuthorizationGrant`/`TransferAuthorizationDenied` are new, strictly additive Agent Protocol v1 message types — see `docs/specifications/m0-agent-protocol-contract.md` "Transfer authorization". Their addition does not reopen WSS, pinned TLS, `AuthRequest`/`SessionEstablished`, or `BootstrapEvidence`.
+`TransferAuthorizationRequest` / `TransferAuthorizationGrant` / `TransferAuthorizationDenied` are three new, strictly additive Agent Protocol v1 message types — see `docs/specifications/m0-agent-protocol-contract.md` "Transfer authorization". Their addition does not reopen WSS, pinned TLS, `AuthRequest`/`SessionEstablished`, or `BootstrapEvidence`.
 
-### Mechanism: why a signed capability, not the long-lived credential
+### Per-request proof of possession
 
-The capability is **self-verifying** (cryptographically signed by a Server-held signing secret) rather than looked up in a persisted session table, and is **never itself persisted as a durable, reusable secret** — only the *durable transfer binding* it is checked against (the bindings above, already part of the durable transfer record per ADR-0008 point 10) is durable. Every use is revalidated against that durable state, not merely against the token's own signature and expiry — this is what makes real-time revocation possible (a cancelled transfer, or a revoked credential, is denied immediately, even before the token's natural expiry) without a persisted blacklist.
+Every HTTPS data-plane chunk request carries **both**:
 
-It is deliberately **not** derived from the Endpoint's long-lived Agent runtime credential: that would grant authority disproportionate to one transfer, and could not be revoked without collateral damage to the Endpoint's entire Agent session. See ADR-0008 "Alternatives considered" for the full evaluation against the rejected alternatives.
+1. the sender-constrained transfer capability; and
+2. a fresh proof, signed by the ephemeral private key, that the presenter possesses the private key the capability is bound to.
+
+The signed proof is a **fixed, domain-separated/versioned structure** — the Server does not sign, and the Agent does not sign into this proof, an arbitrary caller-controlled byte string. At minimum, the signed proof binds:
+
+- a proof-contract discriminator/version (so a proof cannot be confused with an unrelated signed structure);
+- the capability identifier, or a cryptographic hash/identity of the exact capability being presented (binds this proof to that one capability, not a different, possibly stolen one);
+- the HTTP operation/method (binds the proof to the specific operation — upload vs. download — preventing a captured read-proof from being replayed as a write, or vice versa);
+- `transfer_id`;
+- `artifact_id`;
+- direction;
+- `chunk_index` or equivalent exact chunk identity (binds the proof to the specific chunk request, preventing replay against a different chunk);
+- `proof_id` — a cryptographically unpredictable, unique identifier for this proof (the replay-detection key, see "Replay and freshness semantics");
+- `issued_at` — the proof's creation time (the freshness input, see "Replay and freshness semantics").
+
+`transfer_id`/`artifact_id`/direction are already carried by the capability itself (and covered by its own signature); binding the proof to the capability's identity is what transitively inherits them for the proof rather than duplicating claims that could otherwise drift out of sync.
+
+### Per-request verification
+
+The Server verifies, for every chunk request, **all** of the following — the complete authorization decision succeeds only if all required checks succeed:
+
+- capability signature/integrity;
+- capability expiry;
+- capability scope (`endpoint_id`/`artifact_id`/direction/`transfer_id` match the request exactly);
+- proof signature validity;
+- the proof's public key matches the capability's bound proof-key thumbprint;
+- the proof's capability identifier/hash matches the capability actually presented alongside it;
+- the proof's operation/chunk binding matches the request actually being made;
+- proof freshness (within the accepted window, see "Replay and freshness semantics");
+- proof replay status (`proof_id` not already accepted for this authorization context);
+- current durable transfer/Attempt/Artifact authorization state (transfer not terminal, owning Attempt not closed `Indeterminate`, Endpoint credential currently `CredentialActive`).
+
+**Terminology, made explicit and precise**: capability signature verification, and proof signature verification, can each be performed **statelessly** — neither requires a durable lookup to check the cryptography itself. Replay detection uses **bounded transient runtime state** (see below) — not durable storage, but not "nothing" either. The **complete authorization decision is state-aware**, because it additionally revalidates current durable transfer/Attempt/Artifact/credential state on every request. No sentence in this Specification should be read as claiming the complete mechanism is stateless; only the cryptographic verification steps are.
+
+**Fail-closed, non-enumerable denial**: every failure above is denied with a single generic outcome that does not reveal *which* specific check failed, to avoid cross-tenant/cross-Endpoint/cross-Artifact enumeration; the Server may record the specific internal reason in its own audit/diagnostic trail (`docs/specifications/m0-persistence-observability-and-domain-events.md`) without exposing it to the requester. This covers at minimum: authorization absent, malformed, or cryptographically invalid; expired; issued for another `transfer_id`/`artifact_id`/`endpoint_id`/direction than the one presented; a proof signed by a key not matching the capability's bound thumbprint; a proof bound to a different capability; a proof for a different operation/chunk than the request being made; a replayed `proof_id`; a stale (out-of-window) proof; the transfer already terminal; the owning Attempt closed `Indeterminate`; presented against the wrong Server; and the Endpoint's credential no longer `CredentialActive` (explicit `CredentialRevoked` cascades to deny outstanding capabilities for that Endpoint, even before their own expiry — see "Relationship with Agent session lifetime").
+
+**Critical invariant**: authorization renewal, or an expired/renewed capability or proof key, never creates a new logical Artifact and never invalidates already-verified chunks. Capability/key expiry and renewal affect only the authorization layer; `transfer_id`, the chunk manifest, and the chunk-resume logic in "Chunk transfer" above are completely unaffected — a chunk already durably received and matching its manifest digest remains valid and is never re-transferred merely because the security capability or proof key was renewed. Existing ADR-0008 manifest/chunk digest verification remains the sole authoritative mechanism for Artifact/chunk byte integrity; proof of possession authorizes the request, it does not duplicate or replace that integrity check. If a concrete HTTP-framing reason later requires including a request-body digest in the proof, that may be specified at wire-contract implementation time without changing this architecture or replacing existing Artifact digest semantics.
+
+### Replay and freshness semantics
+
+- Each proof carries a unique `proof_id`, unpredictable to anyone who has not seen it generated.
+- Proofs are accepted only inside a bounded freshness window measured from `issued_at`. **Exact window duration is implementation-time** (see "Out of scope") — not chosen in this architecture round.
+- The Server maintains a bounded **transient** replay cache of accepted `proof_id` values for the applicable authorization context, covering at least the acceptance window. This is high-frequency security/runtime state, per ADR-0007's durable/transient boundary — it is **not** written into the durable domain database merely to survive restart.
+- Reuse of an already-accepted `proof_id` for that authorization context fails closed (see "Per-request verification").
+- This is intentionally conceptually similar to established proof-of-possession anti-replay patterns (e.g., DPoP's `jti`/`iat` handling) without adopting DPoP, OAuth, or OIDC as a protocol dependency — Bamep's version is scoped to exactly the fields this contract needs.
 
 ### Lifetime and scope
 
-- Single `transfer_id`, single direction, single `artifact_id`, single `endpoint_id` — never reusable across any of those.
-- Reusable across any number of chunk requests belonging to the same transfer, within its validity window — not single-use-per-chunk.
+- Single `transfer_id`, single direction, single `artifact_id`, single `endpoint_id`, single proof-key thumbprint — never reusable across any of those.
+- Reusable across any number of chunk requests belonging to the same transfer, within its validity window — each request still requires its own fresh, unique-`proof_id` proof; only the capability itself is multi-use, never a proof.
 - Short-lived and bounded; renewable/reissuable for the same `transfer_id` under the conditions above. **Exact TTL is implementation-time** (see "Out of scope") — this Specification requires only that it be short-lived, bounded, and renewable, not a specific duration.
 - Denied for further use, and denied for renewal, once the transfer reaches a terminal state (`Verified` or `Failed`) or its owning Attempt is closed `Indeterminate` (`docs/specifications/m0-job-lifecycle-and-scheduling.md` "Reconciliation and the Indeterminate outcome") with no further Attempt authorized.
 
-### Chunk-request revalidation
-
-Every chunk request — not only the first — is revalidated against **current durable state**, in addition to the token's own signature/expiry check:
-
-- the transfer is not in a terminal state;
-- the `endpoint_id`/`artifact_id`/direction match the token's bindings exactly;
-- the Endpoint's credential is currently `CredentialActive` (not `CredentialRevoked`).
-
-**Critical invariant**: authorization renewal, or an expired/renewed token, never creates a new logical Artifact and never invalidates already-verified chunks. Token expiry and renewal affect only the authorization layer; `transfer_id`, the chunk manifest, and the chunk-resume logic in "Chunk transfer" above are completely unaffected — a chunk already durably received and matching its manifest digest remains valid and is never re-transferred merely because the security token was renewed.
-
 ### Reconnect and restart behavior
 
-- **WSS disconnect while an HTTP(S) transfer continues**: the data-plane channel does not depend on the WSS socket remaining open. An already-issued, still-valid token remains usable. If the token expires before the Agent reconnects Agent Protocol, the Agent reconnects (unchanged existing reconnect handling, `m0-agent-protocol-contract.md` "Reconnect / stale-command handling") and then requests a fresh token for the same `transfer_id`.
-- **Agent reconnect**: standard existing Agent Protocol reconnect and Attempt reconciliation (`AwaitingReconciliation`, `StatusQuery`/`StatusReport`) apply unchanged, independent of data-plane token state. A data-plane token never substitutes for, or shortcuts, Attempt reconciliation.
-- **Agent process restart**: any token held only in Agent memory is lost; whether the Agent persists a token to disposable local staging state is implementation-time, not decided here. Once Agent Protocol reconciliation has re-established what the Agent's own local state is for the owning Attempt, if the transfer is still legitimate, the Agent requests a fresh token for the same `transfer_id`.
-- **Server restart**: does not invalidate outstanding, unexpired tokens by itself — verification is a signature check (using a Server-durable signing secret, not an in-memory-only session table) plus a durable-state lookup, both of which survive restart. The owning Attempt's actual current state (which may itself be `AwaitingReconciliation` after a Server restart, per ADR-0006) governs whether further use is still authorized — never assumed either way.
-- **Attempt `AwaitingReconciliation`**: an outstanding or renewed token remains usable while the owning Attempt is `AwaitingReconciliation` and not yet closed — reconciliation is reused, not duplicated, by this contract. Once the Attempt is closed `Indeterminate`, or reaches any terminal outcome, further authorization is denied (see "Lifetime and scope").
+- **WSS disconnect while an HTTPS transfer continues**: the data-plane channel does not depend on the WSS socket remaining open. A temporary WSS disconnect, by itself, does not revoke `CredentialActive`, does not change durable transfer state, does not automatically invalidate an otherwise-valid capability, and does not itself authorize renewal or continuation either. An already-issued, still-valid capability plus a matching proof key remains usable, revalidated per request exactly as above. If Job/Attempt state changes such that continuation is no longer authorized, subsequent HTTP requests fail closed regardless of capability lifetime. If the capability expires before the Agent reconnects Agent Protocol, the Agent reconnects (unchanged existing reconnect handling, `m0-agent-protocol-contract.md` "Reconnect / stale-command handling") and then requests a fresh capability for the same `transfer_id`.
+- **Agent reconnect**: standard existing Agent Protocol reconnect and Attempt reconciliation (`AwaitingReconciliation`, `StatusQuery`/`StatusReport`) apply unchanged, independent of data-plane authorization state. Data-plane authorization never substitutes for, or shortcuts, Attempt reconciliation.
+- **Agent process restart**: the ephemeral private proof key is intentionally non-durable and is lost — the prior sender-constrained capability becomes unusable by that Agent as a direct consequence, by design; it must not be persisted merely to avoid this flow. The Agent re-authenticates over Agent Protocol, the Server reconciles existing durable transfer/Attempt state, and if continuation remains authorized, the Agent generates a new ephemeral keypair and requests a new capability — the same `transfer_id`, Artifact, and already-verified chunks continue unaffected.
+- **Server restart**: outstanding capabilities whose replay-protection continuity cannot be guaranteed (the transient replay cache, "Replay and freshness semantics," does not survive restart) are treated as invalid and must be reissued after the Agent re-establishes the authenticated control-plane context — this is authorization renewal only, and never creates a new `transfer_id`, Artifact, or Attempt, and never implies destructive retry. The implementation must ensure this explicitly (for example, via an authorization epoch, a fresh ephemeral capability-signing context, or an equivalent mechanism) — replay protection must never be silently weakened merely because an in-memory replay cache was lost; a pre-restart capability must not simply resume being accepted once the cache is empty again. The owning Attempt's actual current state (which may itself be `AwaitingReconciliation` after a Server restart, per ADR-0006) governs whether a new authorization is granted — never assumed either way.
+- **Attempt `AwaitingReconciliation`**: an outstanding or renewed capability remains usable while the owning Attempt is `AwaitingReconciliation` and not yet closed — reconciliation is reused, not duplicated, by this contract. Once the Attempt is closed `Indeterminate`, or reaches any terminal outcome, further authorization is denied (see "Lifetime and scope").
 
-### Revocation and fail-closed behavior
+### Renewal
 
-Every case below fails closed, denying the request with a single generic outcome that does not reveal *which* specific check failed — this Specification does not distinguish these cases on the wire, to avoid cross-tenant/cross-Endpoint/cross-Artifact enumeration; the Server may record the specific internal reason in its own audit/diagnostic trail (`docs/specifications/m0-persistence-observability-and-domain-events.md`) without exposing it to the requester:
+Capability renewal repeats the `TransferAuthorizationRequest`/`Grant` exchange for the same, still-legitimate (non-terminal) `transfer_id`, and may either:
 
-- authorization absent, malformed, or cryptographically invalid;
-- expired;
-- issued for another `transfer_id`, `artifact_id`, `endpoint_id`, or direction than the one presented;
-- the transfer is already terminal;
-- the owning Attempt has been closed `Indeterminate` with no further Attempt authorized;
-- presented against the wrong Server (signature does not verify against this Server's signing secret);
-- the Endpoint's credential is no longer `CredentialActive` (explicit `CredentialRevoked` cascades to deny outstanding tokens for that Endpoint, even before their own expiry — see "Relationship with Agent session lifetime").
+- reuse the same still-held ephemeral proof key; or
+- bind a newly generated ephemeral proof key.
+
+Neither choice changes durable transfer identity, and a new capability must **not**: create a new `transfer_id`; create a new Artifact; discard verified chunks; reset the manifest; imply a new Attempt; or imply destructive retry. Renewal is independent of JobStep/Attempt retry (ADR-0006) — it is not a retry. The Server re-evaluates current durable authorization state before issuing every renewal, exactly as for initial issuance.
 
 ### Relationship with Agent session lifetime
 
-A transient WSS control-plane disconnect is **not** authorization revocation — an already-issued, still-valid token remains usable for the duration of its own bounded lifetime, revalidated per request as above. This does not make the data plane an indefinitely reusable independent access channel: every token remains short-lived, single-transfer-scoped, and revalidated against durable state on every use. Authenticated Agent identity, current WebSocket presence, transfer authorization, and durable transfer state remain four distinct facts, never conflated: presence can drop without revoking authorization, but authorization can never outlive the durable transfer's own terminal state or an explicit credential revocation, regardless of presence.
+A transient WSS control-plane disconnect is **not** authorization revocation — an already-issued, still-valid capability plus matching proof key remains usable for the duration of its own bounded lifetime, revalidated per request as above. This does not make the data plane an indefinitely reusable independent access channel: every capability remains short-lived, single-transfer-scoped, sender-constrained, and revalidated against durable state and replay history on every use. Authenticated Agent identity, current WebSocket presence, transfer authorization, and durable transfer state remain four distinct facts, never conflated: presence can drop without revoking authorization, but authorization can never outlive the durable transfer's own terminal state or an explicit credential revocation, regardless of presence.
 
 ### Durable vs. transient authorization state (ADR-0007 boundary)
 
-**Durable**: the transfer's authorization bindings (`endpoint_id`, `transfer_id`, `artifact_id`, direction, `attempt_id`) — recorded once, as part of the same durable transfer record ADR-0008 point 10 already requires, not a separate write; the Server's token-signing secret (durable Server-side operational/configuration secret, exact storage mechanism implementation-time); an audit record of transfer-authorization issuance where the transfer feeds a destructive JobStep, reusing the already-established destructive-dispatch audit pattern (ADR-0007 point 6) rather than inventing new audit infrastructure.
+**Durable**: the transfer's authorization bindings (`endpoint_id`, `transfer_id`, `artifact_id`, direction, `attempt_id`) — recorded once, as part of the same durable transfer record ADR-0008 point 10 already requires, not a separate write; the Server's capability-signing secret (durable Server-side operational/configuration secret, exact storage mechanism implementation-time); an audit record of transfer-authorization issuance where the transfer feeds a destructive JobStep, reusing the already-established destructive-dispatch audit pattern (ADR-0007 point 6) rather than inventing new audit infrastructure.
 
-**Transient**: the individual issued token/capability itself. It is never separately persisted as a durable, reusable row — it is verified statelessly (signature + durable-state cross-check) at the moment of each use, consistent with "do not persist plaintext reusable secrets merely for convenience" (ADR-0007).
+**Transient**: the individual issued capability itself; the ephemeral proof keypair; the per-request proof-of-possession replay cache (`proof_id` values within the acceptance window). None of these are persisted as durable, reusable rows — the capability and proof are each verified using stateless cryptographic checks plus a durable-state cross-check (never described as making the complete mechanism stateless — see "Per-request verification"), and the replay cache is bounded, high-frequency runtime state, consistent with "do not persist plaintext reusable secrets merely for convenience" (ADR-0007) and with `ActionProgress`'s already-accepted non-durable treatment.
+
+### Threat-model statement
+
+The accepted mechanism protects against:
+
+- passive provisioning-LAN capture, through HTTPS;
+- use of a stolen capability by a party that does not possess the bound ephemeral private proof key;
+- cross-Endpoint capability substitution;
+- cross-transfer/cross-Artifact/cross-direction use;
+- straightforward replay of an already-accepted request proof;
+- stale/revoked/terminal authorization use;
+- Server confused-deputy mistakes covered by the explicit bindings above.
+
+It does **not** claim protection if an attacker compromises the authenticated Agent deeply enough to obtain **both** the valid transfer capability **and** the corresponding ephemeral private proof key — consistent with M0's already-accepted assurance boundary for a fully-compromised Endpoint (`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` "M0 threat-model boundary"). This mechanism does not introduce, and should not be read as introducing, any stronger attestation claim than that boundary already accepts.
 
 ## Source reproducibility: M0/V1 offline maintenance capture
 
@@ -242,7 +312,7 @@ Migration mechanics between roles, multi-copy consistency, and retention-duratio
 - the digest algorithm (`digest_algorithm` value) — an implementation/interoperability decision fixed before the concrete wire contract, not chosen here;
 - live-Windows backup and any snapshot/VSS/live-quiescing technology — explicitly outside V1 scope, not designed here;
 - the exact mechanism/component that positively confirms offline/read-only capture conditions to set `capture_consistency = Established` — not designed here;
-- exact transfer-authorization token TTL, concrete signature/wire format, and HTTP-level details (header names, status codes) — implementation-time, consistent with the pattern already established for `digest_algorithm` and chunk size; the mechanism, bindings, issuance sequence, and revocation semantics themselves are accepted (see "Transfer-session authentication");
+- exact transfer-capability TTL, proof-freshness window duration, concrete signature/wire/serialization formats, the concrete asymmetric algorithm for the ephemeral proof key, and HTTP-level details (header names, status codes) — implementation-time, consistent with the pattern already established for `digest_algorithm` and chunk size; the sender-constrained mechanism, bindings, issuance sequence, proof-of-possession fields, replay semantics, and revocation semantics themselves are accepted (see "Transfer-session authentication");
 - the planned-hardware-change (disk-replacement) authorization mechanism — not designed here, remains for the identity Work Package's model;
 - exact schema/field set for Artifact source-provenance records — not decided here;
 - final production backup/snapshot format — explicitly out of M0 scope;
@@ -267,13 +337,13 @@ Per `docs/development/testing.md` "Unit and domain tests": Artifact lifecycle st
 
 Per `docs/development/testing.md` "Simulator": chunked transfer at the M0 20–24 concurrent-endpoint target, including interrupted/corrupted-chunk scenarios and a simulated source-mutation scenario reproducing `docs/reference/transfer-resumability-spike.md` Experiment E's finding (a missing chunk that cannot be honestly regenerated must be reported as failed, never silently substituted); a destructive JobStep must be rejected when `capture_consistency` is `NotEstablished` even if the artifact is `Verified`; a simulated disk-replacement scenario (source Artifact provenance from one disk identity, destructive target a different, newly installed disk identity) must succeed without requiring the two to match; a destructive JobStep must also be rejected when the Artifact is `Verified` and `capture_consistency` is `Established` but the independent trusted-bootstrap precondition (`docs/specifications/m0-endpoint-identity-lifecycle.md` precondition 7) is not established — a fully valid, verified Artifact never by itself authorizes destructive use.
 
-Per `docs/development/testing.md` "Simulator" and "Security-negative tests" (Transfer-session authentication, Issue #15): a valid authorized transfer completing normally; a chunk request with missing authorization rejected; a token for another Endpoint rejected; a token for another `transfer_id` rejected; a token for another Artifact rejected; a token presented for the wrong direction rejected; an expired or explicitly-revoked-via-`CredentialRevoked` token rejected; replay of a token after its owning transfer reached a terminal state rejected; a legitimately interrupted transfer obtaining a renewed token and resuming without re-transferring already-verified chunks and without a new `transfer_id`; a WSS reconnect that does not, by itself, grant or imply a new authorization; all of the above exercised concurrently across 20–24 Simulated Endpoints with independent transfer authorization. Per the Simulator's already-accepted real-transport fidelity rule (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Simulator fidelity boundary"), these scenarios exercise the real `TransferAuthorizationRequest`/`Grant`/`Denied` messages and real per-request revalidation — the Simulator must not bypass transfer authorization merely because it is a Simulator.
+Per `docs/development/testing.md` "Simulator" and "Security-negative tests" (Transfer-session authentication, Issue #15), at minimum: a valid capability with a valid matching proof accepted when durable state authorizes; a valid capability presented with no proof rejected; a valid capability presented with a proof signed by the wrong key rejected; a capability "stolen" by another Simulated Endpoint (presented without possession of the bound private proof key) rejected; a proof bound to a different capability than the one presented rejected; a proof for a different chunk/operation/direction than the request actually made rejected; replay of an already-accepted `proof_id` rejected; a stale (out-of-freshness-window) proof rejected; a capability for another Endpoint rejected; a capability for another `transfer_id` rejected; a capability for another Artifact rejected; a capability presented for the wrong direction rejected; an expired or explicitly-revoked-via-`CredentialRevoked` capability rejected; a legitimately interrupted transfer obtaining a renewed capability (with either a reused or a freshly generated proof key) and resuming without re-transferring already-verified chunks and without a new `transfer_id`; a WSS reconnect that does not, by itself, grant, revoke, or imply a new authorization; a simulated Server restart, after which the old capability is rejected and legitimate reauthorization continues the same `transfer_id` and verified chunks; a simulated Agent restart, after which the old key/capability are unusable and a legitimate new key/capability continue the same durable transfer; all of the above exercised concurrently across 20–24 Simulated Endpoints, each retaining an isolated sender-constrained transfer-authorization context. None of these scenarios require real Secure Boot or physical hardware. Per the Simulator's already-accepted real-transport fidelity rule (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Simulator fidelity boundary"), these scenarios exercise the real `TransferAuthorizationRequest`/`Grant`/`Denied` messages, real ephemeral proof-key generation, and real per-request proof-of-possession and revalidation — the Simulator must not bypass transfer authorization merely because it is a Simulator.
 
-Per `docs/development/testing.md` "Contract tests" (Transfer-session authentication): `TransferAuthorizationRequest`/`Grant`/`Denied` serialization per the wire-encoding conventions in `m0-agent-protocol-contract.md`; a request for an unknown or another Endpoint's `transfer_id` denied without revealing which case applied; token signature verification — valid accepted, tampered/invalid rejected — as contract-level negative cases, without selecting a concrete signing algorithm or library here.
+Per `docs/development/testing.md` "Contract tests" (Transfer-session authentication): `TransferAuthorizationRequest`/`Grant`/`Denied` serialization per the wire-encoding conventions in `m0-agent-protocol-contract.md`, including the proof public key field; a request for an unknown or another Endpoint's `transfer_id` denied without revealing which case applied; capability signature verification — valid accepted, tampered/invalid rejected; proof signature verification — valid accepted, tampered/invalid rejected, wrong-key rejected; proof structure field-binding checks (discriminator/version, capability identity, operation, chunk identity, `proof_id`, `issued_at`) — as contract-level negative cases, without selecting a concrete signing algorithm, serialization, or library here.
 
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
-Manual: owner approval of this Specification — confirmed (see Status). Remaining open items (chunk size, `digest_algorithm` selection, live-Windows backup consistency, the concrete mechanism establishing `capture_consistency = Established`, exact transfer-authorization token TTL/wire format, disk-replacement authorization, and Artifact source-provenance schema) are explicitly non-blocking implementation/future-work detail, not unresolved architecture.
+Manual: owner approval of this Specification — confirmed (see Status), including the sender-constrained transfer-authorization design (owner security review, Issue #15). Remaining open items (chunk size, `digest_algorithm` selection, live-Windows backup consistency, the concrete mechanism establishing `capture_consistency = Established`, exact transfer-capability TTL/proof-freshness window/wire format, disk-replacement authorization, and Artifact source-provenance schema) are explicitly non-blocking implementation/future-work detail, not unresolved architecture.
 
 ## Related ADRs
 
@@ -301,7 +371,7 @@ Manual: owner approval of this Specification — confirmed (see Status). Remaini
 2. Digest algorithm (`digest_algorithm` value) — implementation/interoperability decision, not chosen here.
 3. Live-Windows backup consistency mechanism — explicitly out of V1 scope; a future architecture decision if ever pursued.
 4. The exact mechanism/component that positively confirms offline/read-only capture conditions (`capture_consistency = Established`) — not designed here.
-5. Exact transfer-authorization token TTL, concrete signature/wire format, and HTTP-level details — implementation-time; the mechanism itself is accepted (see "Transfer-session authentication").
+5. Exact transfer-capability TTL, proof-freshness window duration, concrete signature/wire/serialization formats, the asymmetric algorithm for the ephemeral proof key, and HTTP-level details — implementation-time; the sender-constrained mechanism itself is accepted (see "Transfer-session authentication").
 6. Planned-hardware-change (disk-replacement) authorization mechanism — not designed here, remains for the identity Work Package's model.
 7. Exact schema/field set for Artifact source-provenance records — not decided here.
 
