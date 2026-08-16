@@ -78,22 +78,23 @@ Defined **strictly as workflow/scheduler-level authorization** — it does not i
 
 ## Destructive dispatch preconditions
 
-For a destructive JobStep, dispatch additionally requires the full composition of the six independent preconditions from `docs/specifications/m0-endpoint-identity-lifecycle.md`:
+For a destructive JobStep, dispatch additionally requires the full composition of the seven independent preconditions from `docs/specifications/m0-endpoint-identity-lifecycle.md`:
 
 1. trusted persistent Endpoint identity;
 2. authenticated current Agent session (`CredentialActive`);
-3. workflow/scheduler authorization — exactly the definition immediately above, **not** recursively this complete six-item set;
+3. workflow/scheduler authorization — exactly the definition immediately above, **not** recursively this complete seven-item set;
 4. sufficiently fresh inventory (current inventory revision);
 5. target disk identity/fingerprint revalidation;
-6. hardware confidence `Consistent` (not `LoweredConfidence`/`Conflict`).
+6. hardware confidence `Consistent` (not `LoweredConfidence`/`Conflict`);
+7. trusted current bootstrap context — the current Agent boot/session is anchored in a bootstrap context whose integrity/authenticity has been established, per `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`'s `trusted bootstrap established` property and `docs/specifications/m0-endpoint-identity-lifecycle.md` precondition 7. This is not named or represented as `SecureBootEnabled`; Job/Application code does not inspect firmware state to evaluate it, and it is never inferred from precondition 2 (`CredentialActive`) — a valid current credential does not prove the boot path leading to this session was itself trusted.
 
 A non-destructive JobStep requires only workflow/scheduler authorization, plus whichever of its own declared preconditions are time-sensitive (see "Revalidation immediately before dispatch").
 
 ## Revalidation immediately before dispatch
 
-`PreconditionsSatisfied` is preliminary eligibility only — it does not assert that workflow/scheduler authorization or the destructive dispatch preconditions already hold, since Attempt-scoped leases and workflow authorization are not yet established at that stage. Once Attempt-scoped leases are held, the complete precondition set relevant to the JobStep — workflow/scheduler authorization always, plus the full six-item destructive dispatch composition for a destructive JobStep — is evaluated once, atomically, **immediately before the durable dispatch commitment is created and persisted** (`docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md`'s persist-before-send ordering: leases held → revalidate → durably commit → transaction commits → transmission attempted immediately after). Revalidation gates the durable commitment, not the WebSocket send directly — there is no second precondition evaluation between the commit and the transmission attempt.
+`PreconditionsSatisfied` is preliminary eligibility only — it does not assert that workflow/scheduler authorization or the destructive dispatch preconditions already hold, since Attempt-scoped leases and workflow authorization are not yet established at that stage. Once Attempt-scoped leases are held, the complete precondition set relevant to the JobStep — workflow/scheduler authorization always, plus the full seven-item destructive dispatch composition for a destructive JobStep — is evaluated once, atomically, **immediately before the durable dispatch commitment is created and persisted** (`docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md`'s persist-before-send ordering: leases held → revalidate → durably commit → transaction commits → transmission attempted immediately after). Revalidation gates the durable commitment, not the WebSocket send directly — there is no second precondition evaluation between the commit and the transmission attempt.
 
-If revalidation fails: the Attempt is **not** created, no durable dispatch commitment is persisted, `ActionDispatch` is **not** sent, the just-acquired Attempt-scoped leases are released, and the JobStep returns to `Pending`. A JobStep must never dispatch based only on a stale earlier `PreconditionsSatisfied` evaluation. Whether repeated revalidation failure should eventually produce a terminal `Failed{PreconditionNotMet}` is implementation-time policy, not decided here.
+If revalidation fails — including failure of precondition 7 (trusted current bootstrap context) alone, with all other preconditions holding — the Attempt is **not** created, no durable dispatch commitment is persisted, `ActionDispatch` is **not** sent, the just-acquired Attempt-scoped leases are released, and the JobStep returns to `Pending`. Precondition 7 participates in this same final pre-dispatch revalidation exactly like the other six; no separate revalidation path exists for it. A JobStep must never dispatch based only on a stale earlier `PreconditionsSatisfied` evaluation. Whether repeated revalidation failure should eventually produce a terminal `Failed{PreconditionNotMet}` is implementation-time policy, not decided here.
 
 ## Attempt lifecycle
 
@@ -177,6 +178,7 @@ Per `docs/development/testing.md` "Unit and domain tests":
 
 - state-transition tests (valid and rejected) for Job (including `Pending`→`Cancelled` and `Cancelling`→`Cancelled` paths), JobStep, and Attempt independently;
 - revalidation tests: a JobStep whose destructive preconditions become false between `PreconditionsSatisfied` and lease acquisition must return to `Pending` and must never dispatch;
+- a negative destructive-dispatch test where preconditions 1–6 all hold and precondition 7 (trusted current bootstrap context) alone does not — destructive dispatch must still be rejected, demonstrating precondition 7's independence from the other six, and specifically from precondition 2 (`CredentialActive`);
 - retry-policy tests demonstrating a destructive JobStep's Attempt never triggers an automatic retry from `Failed`, `Rejected`, or `Indeterminate`;
 - `Indeterminate` tests: an Attempt in `AwaitingReconciliation` receiving `StatusReport{Unknown}` does not automatically become `Indeterminate` without the explicit reconciliation decision step, and a destructive JobStep's next Attempt is never authorized without a recorded operator decision;
 - Agent Protocol state-mapping tests: `StatusReport{Accepted}` and `StatusReport{Running}` both resolve to Attempt `InProgress`.
@@ -197,6 +199,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (destructive-operation authorization preconditions).
 - ADR-0005 — Agent control-plane protocol and typed-action model (Agent-action states, retry mechanism, `StatusQuery`).
 - ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`; persist-before-send dispatch ordering `Dispatched` relies on).
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`; source of destructive dispatch precondition 7).
 
 ## Related work
 
@@ -206,6 +209,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - Issue #5 / ADR-0007 — persistence, observability, and domain-event model, including the persist-before-send dispatch ordering and an `Indeterminate` notification event.
 - Issue #6 — `[WP] Define data-plane and storage contracts` (transfer JobSteps).
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (reconciliation and cancellation scenarios).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; source of destructive dispatch precondition 7, `docs/specifications/m0-endpoint-identity-lifecycle.md`).
 
 ## Open questions
 

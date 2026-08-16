@@ -86,6 +86,8 @@ If a future Selective-backup workflow is composed of multiple independent Artifa
 
 Only a `Verified` artifact may be consumed by a destructive operation, and — where the Artifact type requires capture consistency — only one whose `capture_consistency` is `Established` (see "Capture/source-consistency fact"). A destructive JobStep's precondition revalidation (ADR-0006 "Revalidation immediately before dispatch") must include checking both facts for any artifact it depends on, at dispatch time, not merely when the JobStep was first evaluated.
 
+**These two Artifact-specific gates (`Verified`, `capture_consistency == Established`) are additive to, and never replace or narrow, the complete destructive-operation precondition set owned by `docs/specifications/m0-endpoint-identity-lifecycle.md` and composed by `docs/specifications/m0-job-lifecycle-and-scheduling.md` "Destructive dispatch preconditions."** That base set now includes trusted current bootstrap context (precondition 7, `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`), alongside the six preconditions already in force. A `Verified` Artifact whose `capture_consistency` is `Established` does not by itself authorize destructive use — every base precondition, including trusted bootstrap, must independently hold at dispatch time. This Specification does not restate that full list; see the two Specifications above for its authoritative content.
+
 ## Artifact source provenance and multi-disk endpoints
 
 An Endpoint is not modeled as having one implicit disk — Bamep supports endpoints with multiple physical disks and/or volumes (e.g., an NVMe/SSD holding Windows plus an HDD holding user data, multiple data disks, or an old HDD as a capture source while a new SSD/NVMe becomes the provisioning target).
@@ -157,7 +159,7 @@ Per `docs/development/testing.md` "Data transfer and artifact tests": interrupte
 
 Per `docs/development/testing.md` "Unit and domain tests": Artifact lifecycle state-transition tests (valid and rejected transitions); chunk-manifest verification logic (chunk digest, full-artifact digest) as pure domain tests, decoupled from actual network transfer.
 
-Per `docs/development/testing.md` "Simulator": chunked transfer at the M0 20–24 concurrent-endpoint target, including interrupted/corrupted-chunk scenarios and a simulated source-mutation scenario reproducing `docs/reference/transfer-resumability-spike.md` Experiment E's finding (a missing chunk that cannot be honestly regenerated must be reported as failed, never silently substituted); a destructive JobStep must be rejected when `capture_consistency` is `NotEstablished` even if the artifact is `Verified`; a simulated disk-replacement scenario (source Artifact provenance from one disk identity, destructive target a different, newly installed disk identity) must succeed without requiring the two to match.
+Per `docs/development/testing.md` "Simulator": chunked transfer at the M0 20–24 concurrent-endpoint target, including interrupted/corrupted-chunk scenarios and a simulated source-mutation scenario reproducing `docs/reference/transfer-resumability-spike.md` Experiment E's finding (a missing chunk that cannot be honestly regenerated must be reported as failed, never silently substituted); a destructive JobStep must be rejected when `capture_consistency` is `NotEstablished` even if the artifact is `Verified`; a simulated disk-replacement scenario (source Artifact provenance from one disk identity, destructive target a different, newly installed disk identity) must succeed without requiring the two to match; a destructive JobStep must also be rejected when the Artifact is `Verified` and `capture_consistency` is `Established` but the independent trusted-bootstrap precondition (`docs/specifications/m0-endpoint-identity-lifecycle.md` precondition 7) is not established — a fully valid, verified Artifact never by itself authorizes destructive use.
 
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
@@ -169,6 +171,7 @@ Manual: owner approval of this Specification — confirmed (see Status). Remaini
 - ADR-0004 — Endpoint identity (destructive-operation preconditions consuming artifact `Verified`/`capture_consistency` state; target-disk identity revalidation independent of Artifact source provenance).
 - ADR-0006 — Job/JobStep/Attempt model (revalidation before dispatch consuming artifact state; retry policy for `Failed` artifacts).
 - ADR-0007 — Persistence backend and durable/transient boundary (artifact/manifest durability; `transfer_id` correlation).
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of the trusted-bootstrap precondition this Specification's Artifact gates are additive to, not a substitute for.
 
 ## Related work
 
@@ -179,6 +182,7 @@ Manual: owner approval of this Specification — confirmed (see Status). Remaini
 - Issue #4 / ADR-0006 — Attempt model; destructive-operation revalidation.
 - Issue #5 / ADR-0007 — persistence of artifact/manifest state.
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this contract).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; source of the trusted-bootstrap precondition this Specification's Artifact-specific gates are additive to).
 
 ## Open questions
 

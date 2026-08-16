@@ -59,6 +59,6 @@ The Spike also demonstrated an important limitation: Secure Boot authenticates *
 
 1. The concrete trusted-bootstrap and Server-fingerprint-delivery contract (listed above) — explicitly out of scope for this ADR, required before production implementation.
 2. Whether/how a future alternative hardened boot mechanism would be specified and validated to satisfy the `trusted bootstrap established` invariant — not designed here.
-3. Exact Simulator fixture representation of `trusted bootstrap established` — owned by future Simulator/vertical-slice implementation work, not decided here.
+3. Exact Simulator fixture representation of `trusted bootstrap established` — the dedicated future trusted-bootstrap M0 contract (see "Related work") owns the semantic fixture contract, i.e. what production fact the fixture substitutes for; Simulator/vertical-slice implementation work later chooses only its concrete implementation/configuration technique within that contract, not the semantics themselves. Not decided here either way.
 
 Status: Accepted.

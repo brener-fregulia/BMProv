@@ -42,7 +42,7 @@ Define the Simulator's fidelity boundary, required scenarios, concurrency target
 
 This does not change `docs/development/testing.md` "Fakes and test boundaries", which separately and explicitly permits faking Agent connections for narrower Unit/Component/Integration tests where the real transport is not the behavior under test — that remains available below the Simulator layer; it is only Simulator-level scenarios that require the real transport.
 
-For Simulator execution, the production boot chain itself remains faked (per "Faked boundaries" above). The Simulator may receive deterministic fixture material representing the trusted Server fingerprint / boot-issued enrollment context that a real endpoint would otherwise obtain through the boot boundary. This fixture substitution must not be represented as validating the production fingerprint-delivery mechanism — that mechanism is owned by the Secure Boot / hardened boot-chain Technical Spike (Issue #10) and remains unresolved by this Specification (see "What the Simulator cannot represent").
+For Simulator execution, the production boot chain itself remains faked (per "Faked boundaries" above) — this includes production PXE/UEFI/Secure Boot, which the Simulator does not exercise. The Simulator may receive deterministic fixture material substituting for the result of that boundary: `trusted bootstrap established` (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`), plus whatever authenticated Server fingerprint / enrollment context the future trusted-bootstrap contract requires. This fixture substitution must not be represented as validating the production Secure-Boot-backed trusted-bootstrap mechanism itself. Issue #10 is complete and produced ADR-0010 (`trusted bootstrap established` accepted as the V1 baseline security property); the production fingerprint-delivery mechanism is no longer "owned by Issue #10" — it is owned by the dedicated, unresolved M0 trusted-bootstrap contract that will be materialized separately (ADR-0010 "Related work"). The concrete fixture field/schema/token/manifest representation is **not** defined by this Specification — that dedicated contract defines the semantic fixture contract (what production fact the fixture substitutes for); Simulator implementation later chooses only its concrete implementation/configuration technique within that contract, once it exists (see "What the Simulator cannot represent").
 
 Given the fixture boundary above, the Simulator must still exercise real Agent Protocol behavior after it, including at minimum:
 
@@ -89,6 +89,8 @@ The scenario categories below are the failure-scenario list from Issue #7's appr
 
 Additional data-plane-specific Simulator scenarios already required by `docs/specifications/m0-data-plane-and-storage-contracts.md` "Validation expectations" (Simulator) apply directly and are not restated here: chunked transfer at the concurrency target with interrupted/corrupted-chunk scenarios; a simulated source-mutation scenario reproducing `docs/reference/transfer-resumability-spike.md` Experiment E; rejection of a destructive JobStep when `capture_consistency` is `NotEstablished` even if the Artifact is `Verified`; a simulated disk-replacement scenario (source Artifact provenance differing from the destructive target's disk identity) succeeding without requiring the two to match.
 
+**Required trusted-bootstrap independence scenario (added following ADR-0010):** a destructive dispatch must be rejected when an Endpoint is otherwise `Enrolled`, credential is `CredentialActive`, inventory is fresh, target disk is valid, hardware confidence is `Consistent`, and workflow/scheduler authorization holds, but trusted bootstrap (`docs/specifications/m0-endpoint-identity-lifecycle.md` precondition 7) is not established — destructive dispatch must never occur in this case. This scenario validates precondition 7's independence from the other six preconditions, and specifically from `CredentialActive` (precondition 2): a valid credential must never be treated as proof that the current boot path was itself trusted.
+
 ## Concurrency target
 
 The Simulator must support a scenario with 20–24 concurrent Simulated Endpoints (`docs/specifications/m0-architecture-baseline.md` "First implementation slice after M0"), consistent with the High-density installation profile (`docs/discovery/architecture-redesign.md` "Capacity and scheduling"). Smaller counts (Small/Medium profiles, 3–10 endpoints) remain useful for faster-iterating scenario development and are not excluded — the 20–24 target is the minimum ceiling the Simulator must reach for M0 acceptance, not the only supported scale.
@@ -120,7 +122,13 @@ Concrete acceptable thresholds are **not** defined by this Specification — no 
 
 Per `docs/development/testing.md` "Integration Environment", the following remain deferred to the physical Bamep laboratory or owner manual validation, and are not claimed as Simulator-covered by this Specification: PXE; DHCP behavior; UEFI firmware; GRUB; Alpine boot; physical NIC behavior; MikroTik integration; real disk tooling; Windows deployment; WinPE; hardware-specific compatibility; destructive end-to-end provisioning.
 
-Three explicitly isolated Technical Spikes feed, but are not resolved by, this Specification: the WinPE boot mechanism (Issue #8), Secure Boot / hardened boot chain (Issue #10), and driver-provider integration (Issue #11). Their results may later require the Simulator's fidelity boundary to be revisited (for example, if Issue #10 finds the Agent Protocol Server-fingerprint delivery mechanism must change, per `m0-agent-protocol-contract.md`), but none of the three block this Specification's own scope.
+Three Technical Spikes previously listed as explicitly isolated are now complete, each feeding this Specification without resolving or narrowing it:
+
+- **WinPE boot mechanism (Issue #8)** — complete; WinPE UEFI boot viability is established, but the network-delivered boot mechanism remains isolated as future Integration Environment validation work (`docs/reference/winpe-boot-mechanism-spike.md`).
+- **Secure Boot / hardened boot chain (Issue #10)** — complete; produced ADR-0010's `trusted bootstrap established` baseline (`docs/reference/secure-boot-hardened-chain-spike.md`).
+- **Driver-provider integration (Issue #11)** — complete; produced ADR-0009's operator-managed driver-repository boundary (`docs/reference/driver-provisioning.md`).
+
+Their remaining production/hardware concerns still belong to the Integration Environment or to their own explicitly isolated follow-up contracts — the network-delivered boot mechanism for Issue #8; the dedicated trusted-bootstrap/Server-fingerprint-delivery contract for Issue #10/ADR-0010. None of the three block this Specification's own scope, and none require the Simulator's fidelity boundary above to change. The Simulator does not validate real Secure Boot, real PXE/network-delivered boot, or real driver injection — these remain Integration Environment concerns per "What the Simulator cannot represent" above.
 
 ## M0 architecture-planning gap: Administrative API / Web contract
 
@@ -148,15 +156,15 @@ Manual: owner approval of this Specification — confirmed (see Status).
 
 ## Related ADRs
 
-No new ADR is introduced by this Work Package. This Specification consolidates and applies the destructive-operation, protocol, scheduling, persistence, and data-plane decisions already `Accepted` in ADR-0004 through ADR-0008, including the Simulator-transport fidelity decision recorded above, which does not itself establish a new durable architectural boundary beyond what ADR-0005 already defines (`docs/development/documentation-policy.md` "Architectural Decision Records").
+No new ADR is introduced by this Work Package. This Specification consolidates and applies the destructive-operation, protocol, scheduling, persistence, data-plane, driver-provider, and trusted-bootstrap decisions already `Accepted` in ADR-0004 through ADR-0010, including the Simulator-transport fidelity decision recorded above, which does not itself establish a new durable architectural boundary beyond what ADR-0005 already defines (`docs/development/documentation-policy.md` "Architectural Decision Records").
 
 ## Related work
 
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy`.
 - Issues #2–#6 and their ADRs/Specifications — consumed directly (see table above).
-- Issue #8 — `[Spike] Validate WinPE boot mechanism` (feeds, does not block).
-- Issue #10 — `[Spike] Validate Secure Boot and hardened boot chain` (feeds, does not block; may affect Agent Protocol fingerprint delivery).
-- Issue #11 — `[Spike] Evaluate driver-provider integration` (feeds, does not block).
+- Issue #8 — `[Spike] Validate WinPE boot mechanism` (complete; feeds, does not block — network-delivered boot mechanism isolated for future Integration Environment validation).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; feeds, does not block — source of the trusted-bootstrap fixture boundary above; the concrete Server-fingerprint delivery contract remains a separate, dedicated, unresolved M0 contract).
+- Issue #11 / ADR-0009 — `[Spike] Evaluate driver-provider integration` (complete; feeds, does not block).
 
 ## Open questions
 

@@ -15,7 +15,9 @@ Operator-approval-gated first enrollment is the accepted M0 default (ADR-0004): 
 
 ## State dimensions
 
-An Endpoint's trust and operational readiness are governed by **three independent state dimensions**, not one mutually exclusive machine. An earlier draft of this Specification collapsed persistent identity, credential/session validity, and hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal` state alongside `CredentialActive`); that conflated concerns that legitimately coexist — an `Enrolled` Endpoint can simultaneously have an expired credential and lowered hardware confidence, and forcing that into one mutually exclusive machine would make the combination unrepresentable or misleading. The three dimensions below may combine freely.
+An Endpoint's trust and operational readiness are governed by **three independent, Endpoint-owned state dimensions**, not one mutually exclusive machine. An earlier draft of this Specification collapsed persistent identity, credential/session validity, and hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal` state alongside `CredentialActive`); that conflated concerns that legitimately coexist — an `Enrolled` Endpoint can simultaneously have an expired credential and lowered hardware confidence, and forcing that into one mutually exclusive machine would make the combination unrepresentable or misleading. The three dimensions below may combine freely.
+
+These three dimensions are all facts *about the Endpoint identity record itself*. **`trusted bootstrap established`** (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`; destructive-operation precondition 7 below) is a different kind of fact — a security property of the **current boot/session context**, not a fourth Endpoint identity-lifecycle dimension, and it is not modeled or represented here as one. Its concrete representation/state machine remains owned by the dedicated future trusted-bootstrap contract (ADR-0010 "Related work"), not by this Specification's three-dimension model.
 
 ### 1. Endpoint identity lifecycle (persistent record)
 
@@ -37,7 +39,7 @@ Transitions:
 
 ### 2. Credential/session lifecycle (independent of identity lifecycle)
 
-- **NoActiveCredential** — no runtime credential currently issued (e.g., Endpoint offline, or not yet past enrollment).
+- **NoActiveCredential** — no runtime credential currently issued (e.g., no runtime credential has yet been issued; a prior credential was explicitly removed and no replacement is active; or enrollment has not yet reached the point where a runtime credential exists). Being offline/disconnected is **not** an example of `NoActiveCredential` — current Agent presence (connectivity) and credential validity are independent facts (`docs/specifications/m0-administrative-api-web-read-contract.md` already establishes this for the `agent_presence` read representation): an Endpoint may hold a valid, unexpired `CredentialActive` credential while currently disconnected.
 - **CredentialActive** — a runtime Agent identity/session credential is currently valid.
 - **CredentialExpired** — the runtime credential's validity period has elapsed.
 - **CredentialRevoked** — the runtime credential was explicitly invalidated (operator action, or Server-driven revocation, e.g. as a consequence of a `Conflict` hardware-confidence state).
