@@ -9,11 +9,26 @@ This Specification defines the concrete message-level contract for the Agent con
 ## Transport and handshake
 
 - WebSocket over TLS (WSS).
-- **Server authentication (pinned TLS), Agent authentication (credential) — not mTLS.** The Server's certificate fingerprint must be delivered to the Agent through an authenticated, integrity-protected trusted bootstrap — the `trusted bootstrap established` security property accepted in ADR-0010, with Secure Boot as the V1 baseline mechanism for establishing executable boot-chain integrity on UEFI x86-64. Secure Boot alone does not authenticate the fingerprint or enrollment data itself; the concrete contract binding that site-specific bootstrap material to the trusted chain remains a dedicated, unresolved M0 contract, not decided here (see "Related work"). The Agent does not present a client certificate.
+- **Server authentication (pinned TLS), Agent authentication (credential) — not mTLS.** The Server's certificate fingerprint must be delivered to the Agent through an authenticated, integrity-protected trusted bootstrap — the `trusted bootstrap established` security property accepted in ADR-0010, with Secure Boot as the V1 baseline mechanism for establishing executable boot-chain integrity on UEFI x86-64. Secure Boot alone does not authenticate the fingerprint or enrollment data itself; the fingerprint is authenticated via a nonce-bound signed bootstrap assertion, and its Server-observable representation is carried post-authentication by `BootstrapEvidence` (see "Trusted bootstrap evidence" below) — both accepted in `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`. That Specification's site trust-anchor provisioning question (how an Endpoint comes to trust the signing key in the first place) remains separately unresolved and is not decided here. The Agent does not present a client certificate.
 - The Agent verifies the pinned Server fingerprint **before** Agent Protocol authentication begins. A fingerprint mismatch is a local TLS/Server-authentication failure, not an Agent Protocol event: the Agent aborts the connection immediately at the TLS layer, and no `AuthError` (or any other Agent Protocol message) is exchanged for it. There is no trust-on-first-use fallback and no acceptance of an unverified Server certificate under any circumstance.
 - The Agent must fail closed when trustworthy bootstrap material — including the expected Server fingerprint — cannot be established through the trusted-bootstrap path: it must never fall back to an unverified Server certificate or proceed without one. This requirement, and the WSS/pinned-TLS/typed Agent Protocol decisions themselves, are unchanged by ADR-0010; ADR-0005 is not reopened.
 - Handshake sequence: Agent connects → Agent verifies the Server's pinned TLS fingerprint (mismatch aborts the connection immediately, no Agent Protocol message exchanged) → *(TLS Server-authentication succeeded)* → Agent sends `AuthRequest{credential}` → Server validates the credential against the Endpoint identity/credential state model (`docs/specifications/m0-endpoint-identity-lifecycle.md`) → Server responds `SessionEstablished{protocol_version, session_id}` or `AuthError{reason}`.
 - `AuthError` is exchanged only for application-level Agent Protocol authentication/handshake failures that occur **after** the TLS Server identity check has already succeeded — a rejected enrollment/runtime credential, or an incompatible `protocol_version` during the Agent Protocol handshake. It is never used for a fingerprint mismatch.
+
+## Trusted bootstrap evidence
+
+After Agent Protocol authentication succeeds (`SessionEstablished`), the Agent sends a one-way `BootstrapEvidence` report carrying the Server-observable representation of the locally-established trusted-bootstrap fact (ADR-0010; `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`).
+
+**This does not change WSS, pinned-TLS verification, `AuthRequest` credential semantics, or `SessionEstablished` semantics, and does not reopen ADR-0005.** `CredentialActive` and `trusted bootstrap established` remain independent facts (ADR-0010); this message is what lets the Server observe the latter without inferring it from the former, from a fingerprint match alone, from a TCP/WSS connection, or from mere possession of a valid assertion without performing independent verification.
+
+**What Server-side verification of this evidence proves, and does not prove** (`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` "(D) Server-side bootstrap evidence"): independently verifying the signed assertion proves the assertion was produced by the accepted site signer, that its authenticated material is intact, and that it is bound to the declared `boot_nonce`. It does **not** independently prove that firmware Secure Boot was enabled, that the expected executable chain actually executed, or that the current Agent process itself is genuine — those remain covered only by the production trusted-bootstrap baseline (ADR-0010), not re-proven by this message. This is an authenticated Agent report, not cryptographic remote attestation.
+
+**Sequencing and correlation:**
+
+- `BootstrapEvidence` is sent only after TLS pin verification succeeded and `SessionEstablished` has been received — never before authentication, never as part of the handshake itself.
+- The Server independently verifies the signed assertion (signature, signer identity against the site trust anchor, schema/version, exact `boot_nonce` match, required field validity) — it never trusts the Agent's `local_boot_trust` claim by itself.
+- `boot_nonce` also serves as the boot-context correlator: the Server associates an accepted result with the current Endpoint boot context via this value. A WSS reconnect within the same boot context may re-present the same `boot_nonce`/assertion for the Server to re-correlate/reconfirm; a new one is not required merely because the socket changed. A genuine reboot produces a new `boot_nonce` and requires newly-established evidence.
+- Missing, malformed, invalid-signature, nonce-mismatched, or otherwise rejected evidence leaves the Server-side `trusted bootstrap` fact `NotEstablished` for that boot context and fails closed — no destructive dispatch may satisfy destructive-operation precondition 7 (`docs/specifications/m0-endpoint-identity-lifecycle.md`) before this evidence is accepted.
 
 ## Message envelope
 
@@ -39,6 +54,7 @@ Every message includes:
 ## Message types
 
 - `AuthRequest` / `SessionEstablished` / `AuthError` — handshake (see above). `AuthError` is used **only** for application-level Agent Protocol authentication/handshake failures occurring after the TLS Server identity check has already succeeded — a rejected enrollment/runtime credential, or an incompatible `protocol_version` during the handshake. A TLS fingerprint mismatch is never reported as `AuthError`; it is a connection-level abort before any Agent Protocol message is exchanged. Protocol-level violations after a session is established use `ProtocolError` instead (see below).
+- `BootstrapEvidence{boot_nonce, bootstrap_assertion, local_boot_trust: Established}` — Agent → Server, one-way, sent only after `SessionEstablished`. Carries the Server-observable representation of the locally-established trusted-bootstrap fact; see "Trusted bootstrap evidence" above for full semantics, independent Server-side verification requirements, and boot-context correlation via `boot_nonce`. `bootstrap_assertion` is an opaque value from this protocol's perspective — its internal structure is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, not redefined here. `local_boot_trust` is a closed vocabulary with a single defined M0 value, `Established` — a local failure to establish trusted bootstrap already prevents the Agent from reaching this point in the sequence, so no other value is sent in M0.
 - `ActionDispatch{action_id, action_type, action_version, parameters, retry_of?}` — Server → Agent; requests execution of a typed action.
 - `ActionAck{action_id, outcome: Accepted|Rejected, error?}` — Agent → Server; confirms whether a dispatch was accepted for execution or rejected before execution (e.g., unknown or malformed `action_type`), distinct from completion. A `Rejected` dispatch never executed and must never be represented as an `ActionResult` with outcome `Failed` — no execution occurred, so there is no result to report, only a rejection reason.
 - `ActionProgress{action_id, percent?, bytes_processed?, eta?}` — Agent → Server; periodic progress metadata for long-running actions. Bulk transfer bytes are not carried here (data-plane, Issue #6).
@@ -97,6 +113,7 @@ Cross-language conventions required to make this Specification independently imp
 - `CancelAck` must report `CannotCancel` honestly rather than a false `Cancelled` when a destructive action has passed its point of no return, and must report `Unknown` — never a false `CannotCancel` — when the Agent has no authoritative local state for the `action_id`.
 - A `Rejected` `ActionAck` must never be reported as a `Failed` `ActionResult` — rejection means no execution occurred.
 - A missing or timed-out `ActionAck` is an uncertain delivery outcome, never treated as proof of non-delivery, and never by itself grounds for blind redispatch of a destructive action (see "Acknowledgment timeout semantics").
+- Missing, malformed, invalid-signature, nonce-mismatched, or otherwise rejected `BootstrapEvidence` leaves trusted bootstrap `NotEstablished` for the current boot context and fails closed — destructive-operation precondition 7 can never be satisfied without independently Server-verified evidence (see "Trusted bootstrap evidence"). The Server never infers `trusted bootstrap established` from `CredentialActive`, a fingerprint match alone, or a live connection.
 
 ## Out of scope
 
@@ -105,7 +122,8 @@ Cross-language conventions required to make this Specification independently imp
 - bulk data-transfer contract (Issue #6);
 - Administrative API / Browser-Server protocol — not decided by this Work Package;
 - heartbeat interval and other implementation-time tuning parameters;
-- the concrete trusted-bootstrap and Server-fingerprint/bootstrap-material delivery contract binding site-specific data to the Secure-Boot-backed trusted chain (ADR-0010) — a dedicated, unresolved M0 contract requiring its own future Work Package, not designed by this Specification;
+- the internal structure/format of `bootstrap_assertion`, and how it is produced/authenticated — owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`; this Specification only defines how the already-produced evidence is carried over Agent Protocol, not how it is produced;
+- the site trust-anchor provisioning mechanism (how an Endpoint comes to trust the signing key `bootstrap_assertion` is verified against) — remains unresolved in `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, not designed here;
 - Secure Boot / firmware boot-chain mechanics themselves — an Adapter/Boot Port concern (`docs/specifications/m0-stack-and-boundaries-baseline.md`), not this Specification's scope.
 
 ## Acceptance criteria
@@ -127,7 +145,8 @@ Per `docs/development/testing.md` "Contract tests", expected coverage once imple
 - `CancelAction` on an already-completed action (`AlreadyCompleted`, not a false `Cancelled`);
 - `CancelAction` on an `action_id` the Agent has no record of (`Unknown`, not collapsed into `CannotCancel`);
 - `StatusQuery` for an `action_id` the Agent has no record of (`Unknown`, not treated as "not executed");
-- missing/timed-out `ActionAck` treated as an uncertain outcome, not as proof of non-delivery, and not triggering automatic redispatch.
+- missing/timed-out `ActionAck` treated as an uncertain outcome, not as proof of non-delivery, and not triggering automatic redispatch;
+- `BootstrapEvidence` handling: a valid signed assertion with matching `boot_nonce` is accepted and correlated to the current boot context; an invalid signature is rejected; a nonce mismatch (replay) is rejected; missing evidence leaves trusted bootstrap `NotEstablished`; a reconnect re-presenting the same `boot_nonce`/assertion within the same boot context is accepted/reconciled without requiring new evidence; evidence sent before `SessionEstablished` is rejected.
 
 Per `docs/development/testing.md` "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
 
@@ -137,7 +156,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 
 - ADR-0005 — Agent control-plane protocol and typed-action model (`Accepted`).
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (credential this handshake validates).
-- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — establishes `trusted bootstrap established` as the security property the Server-fingerprint delivery requirement above depends on; does not itself define the fingerprint-delivery contract.
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — establishes `trusted bootstrap established` as the security property `BootstrapEvidence` makes Server-observable.
 
 ## Related work
 
@@ -145,13 +164,14 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - Issue #2 — `[WP] Define endpoint identity and trust model` (ADR-0004, credential validated during handshake).
 - Issue #4 — `[WP] Define Job lifecycle and scheduling model` (Job/action authorization, retry policy, resumption policy; consumes `StatusQuery`/`ActionDispatch`).
 - Issue #6 — `[WP] Define data-plane and storage contracts` (bulk transfer bytes, distinct from `ActionProgress` metadata).
-- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this protocol's scenarios).
-- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; established Secure Boot as the V1 `trusted bootstrap established` baseline). The concrete Server-fingerprint/bootstrap-material delivery contract remains a separate, dedicated, unresolved M0 contract (see "Open questions").
+- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this protocol's scenarios, including `BootstrapEvidence`).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; established Secure Boot as the V1 `trusted bootstrap established` baseline).
+- Issue #13 — `[WP] Define trusted bootstrap and Server fingerprint delivery contract` (`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, `Proposed`) — accepted the nonce-bound signed bootstrap assertion (C) and the authenticated Agent bootstrap report (D) this `BootstrapEvidence` message carries; site trust-anchor provisioning (B) remains the sole unresolved blocker there, not affecting this amendment.
 
 ## Open questions
 
 1. Heartbeat interval and connection-liveness tuning — implementation-time detail.
 2. Whether the Administrative API (Browser-Server) should reuse any envelope conventions from this protocol — not decided, out of scope for M0's Issue #3.
-3. The concrete trusted-bootstrap and Server-fingerprint/bootstrap-material delivery contract — Issue #10/ADR-0010 established that Secure Boot is practically viable and is the V1 baseline for executable boot-chain trust, but did not itself define how site-specific fingerprint/enrollment data is authenticated and bound to that trusted chain. This remains a dedicated, unresolved M0 contract requiring its own future Work Package, not decided here.
+3. The internal structure/format of `bootstrap_assertion`, and the site trust-anchor provisioning mechanism it depends on — owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13), which remains `Proposed` pending resolution of sub-problem (B). Not decided here.
 
 Status: Approved.
