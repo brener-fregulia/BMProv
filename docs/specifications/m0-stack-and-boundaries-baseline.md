@@ -47,9 +47,16 @@ These boundaries apply within the modular-monolith runtime topology accepted in 
 
 ## Boot-orchestration architectural boundary
 
-**Principle (already accepted, persisted here)**: the Domain must not know about GRUB, MikroTik, or device paths such as `/dev/sda`; boot mechanics belong to Adapters, coordinated through the Application-level Boot Orchestration responsibility.
+**Principle (already accepted, persisted here, unchanged by Issue #8's completion)**: the Domain must not know about GRUB, MikroTik, or device paths such as `/dev/sda`; boot mechanics belong to Adapters, coordinated through the Application-level Boot Orchestration responsibility via the already-accepted Boot Port ("Component responsibilities and boundaries" above — Ports: repositories, Agent transport, boot, discovery, storage, infrastructure metrics). Concrete boot mechanisms — GRUB, iPXE, wimboot, PXE, or any other candidate — remain Adapter concerns; this Specification does not select among them.
 
-**Explicitly open, not resolved by this Specification**: the concrete Boot Orchestrator mechanism and its exact contract with the underlying boot chain depend on the WinPE boot mechanism Technical Spike (Issue #8), which has not yet produced evidence. This Specification records only the boundary principle above; the mechanism-level design must wait for that Spike, consistent with Issue #1's stated dependency ("may reference preliminary findings... before finalizing, but is not blocked from starting").
+**Issue #8 is complete**, not pending: the `[Spike] Validate WinPE boot mechanism` produced empirical evidence, recorded in `docs/reference/winpe-boot-mechanism-spike.md`. That evidence establishes:
+
+- WinPE itself is viable under UEFI x86-64 in the tested virtualized environment — boot from local/removable media reproducibly reached a fully initialized shell with working inbox network and storage drivers;
+- the concrete network-delivered WinPE boot mechanism remains unresolved: neither candidate evaluated (iPXE + wimboot over HTTP; GRUB chainload) was demonstrated viable in that environment, each for a distinct, precisely documented, harness-specific reason.
+
+**No production boot mechanism is selected by M0.** The Spike's evidence does not establish that iPXE, wimboot, GRUB, or any other future candidate is unsuitable for Bamep — the observed failures are specific to the local VirtualBox test harness as configured (a hung native-driver NIC path, an SNP path finding no exposed network device, and a GRUB `chainloader` failure occurring after successful file/path resolution but before BCD/artifact processing), not evidenced as a fundamental incompatibility with Bamep's architecture. None of them is treated as rejected on this basis.
+
+The unresolved network-delivered mechanism is explicitly isolated as a **future Integration Environment validation requirement**, to be resolved with real PXE/DHCP/TFTP infrastructure and real UEFI firmware before production boot implementation — it is not hidden inside a future implementation Work Package, and it does not block M0: the first post-M0 simulated vertical slice does not require real WinPE/PXE hardware (`docs/specifications/m0-simulator-contract-and-validation-strategy.md`).
 
 ## Packaging and versioning baseline
 
@@ -77,7 +84,7 @@ Already-accepted direction, persisted here:
 - Product boundary, vocabulary, and non-goals are persisted (M0 acceptance criterion 1) — satisfied by this document.
 - Component responsibilities and boundaries are documented (M0 acceptance criterion 5) — satisfied by this document; approved by the owner as responsibility/dependency boundaries, not a mandated physical structure.
 - Packaging and versioning baseline is persisted — satisfied by this document.
-- The boot-orchestration boundary principle is persisted, and the boundary's concrete mechanism is explicitly isolated pending Issue #8 rather than hidden inside a future implementation Work Package (M0 acceptance criterion 7).
+- The boot-orchestration boundary principle is persisted; Issue #8 is complete and its evidence is incorporated above; the boundary's concrete network-delivered mechanism remains explicitly isolated as a future Integration Environment validation requirement rather than hidden inside a future implementation Work Package (M0 acceptance criterion 7).
 
 ## Related ADRs
 
@@ -88,12 +95,12 @@ Already-accepted direction, persisted here:
 ## Related work
 
 - Issue #1 — `[WP] Define product, runtime, and stack architecture baseline` (this Specification and the three related ADRs are its output).
-- Issue #8 — `[Spike] Validate WinPE boot mechanism` (feeds the Boot Orchestrator mechanism, not yet complete).
+- Issue #8 — `[Spike] Validate WinPE boot mechanism` (complete; produced the empirical evidence in `docs/reference/winpe-boot-mechanism-spike.md` incorporated above — WinPE UEFI boot viability established, network-delivered mechanism explicitly isolated as future Integration Environment validation work).
 
 ## Open questions
 
 None remaining for this Specification's scope. Both items previously open here — the component-boundary elevation and the Worker/Agent language strategy (ADR-0003) — were resolved by explicit owner approval, with the clarifications recorded in the "Nature of these boundaries" section above and in ADR-0003's contract-independence constraint.
 
-The Boot Orchestrator's concrete mechanism remains open pending Issue #8 (see "Boot-orchestration architectural boundary" above) — that is a dependency on a Technical Spike, not an open question of this Specification's own scope.
+The Boot Orchestrator's concrete network-delivered mechanism remains open (see "Boot-orchestration architectural boundary" above). Issue #8 is complete and its evidence is incorporated, but that evidence did not itself resolve which mechanism to use — this is explicitly isolated as a future Integration Environment validation requirement, not an open question of this Specification's own scope, and it does not block M0.
 
 Status: Approved.
