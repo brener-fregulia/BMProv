@@ -58,6 +58,8 @@ These boundaries apply within the modular-monolith runtime topology accepted in 
 
 The unresolved network-delivered mechanism is explicitly isolated as a **future Integration Environment validation requirement**, to be resolved with real PXE/DHCP/TFTP infrastructure and real UEFI firmware before production boot implementation — it is not hidden inside a future implementation Work Package, and it does not block M0: the first post-M0 simulated vertical slice does not require real WinPE/PXE hardware (`docs/specifications/m0-simulator-contract-and-validation-strategy.md`).
 
+**Trusted bootstrap baseline (ADR-0010, added by owner decision after Issue #10):** production trusted Agent bootstrap requires authenticated boot-chain integrity — the `trusted bootstrap established` security property (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`). Secure Boot is the V1 baseline implementation direction for that property. Secure Boot remains behind the Boot Adapter boundary already established above — it is one more concrete boot-chain mechanism, alongside GRUB/iPXE/wimboot/PXE, that the Domain must not depend on directly. Selecting Secure Boot as the trust baseline does **not** select GRUB, iPXE, wimboot, shim, or another network-boot mechanism, and does not reverse or narrow Issue #8's conclusion above: the concrete network-delivered boot mechanism remains unresolved and still requires Integration Environment validation, entirely independent of the trusted-bootstrap decision. The two questions — "how is WinPE delivered over the network" and "how is the boot chain's executable integrity trusted" — are orthogonal; ADR-0010 answers only the second.
+
 ## Packaging and versioning baseline
 
 Already-accepted direction, persisted here:
@@ -91,11 +93,13 @@ Already-accepted direction, persisted here:
 - ADR-0001 — Runtime topology: modular monolith with worker/process isolation (`Accepted`).
 - ADR-0002 — Backend/Server implementation language: Rust (`Accepted`).
 - ADR-0003 — Worker and Agent implementation language strategy: Rust for both, with contracts kept explicit and independently versioned (`Accepted`).
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of the "Trusted bootstrap baseline" consequence recorded above; does not select a network-boot mechanism.
 
 ## Related work
 
 - Issue #1 — `[WP] Define product, runtime, and stack architecture baseline` (this Specification and the three related ADRs are its output).
 - Issue #8 — `[Spike] Validate WinPE boot mechanism` (complete; produced the empirical evidence in `docs/reference/winpe-boot-mechanism-spike.md` incorporated above — WinPE UEFI boot viability established, network-delivered mechanism explicitly isolated as future Integration Environment validation work).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; produced the empirical evidence in `docs/reference/secure-boot-hardened-chain-spike.md`, incorporated above as the "Trusted bootstrap baseline" consequence).
 
 ## Open questions
 

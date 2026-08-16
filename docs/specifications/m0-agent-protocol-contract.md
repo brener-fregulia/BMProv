@@ -9,9 +9,9 @@ This Specification defines the concrete message-level contract for the Agent con
 ## Transport and handshake
 
 - WebSocket over TLS (WSS).
-- **Server authentication (pinned TLS), Agent authentication (credential) — not mTLS.** The Server's certificate fingerprint must be delivered to the Agent through an authenticated, integrity-protected boot mechanism. This Specification does not assume the current boot chain already provides that assurance; the concrete delivery mechanism is informed by the Secure Boot / hardened boot-chain Technical Spike (Issue #10) and is not decided here. The Agent does not present a client certificate.
+- **Server authentication (pinned TLS), Agent authentication (credential) — not mTLS.** The Server's certificate fingerprint must be delivered to the Agent through an authenticated, integrity-protected trusted bootstrap — the `trusted bootstrap established` security property accepted in ADR-0010, with Secure Boot as the V1 baseline mechanism for establishing executable boot-chain integrity on UEFI x86-64. Secure Boot alone does not authenticate the fingerprint or enrollment data itself; the concrete contract binding that site-specific bootstrap material to the trusted chain remains a dedicated, unresolved M0 contract, not decided here (see "Related work"). The Agent does not present a client certificate.
 - The Agent verifies the pinned Server fingerprint **before** Agent Protocol authentication begins. A fingerprint mismatch is a local TLS/Server-authentication failure, not an Agent Protocol event: the Agent aborts the connection immediately at the TLS layer, and no `AuthError` (or any other Agent Protocol message) is exchanged for it. There is no trust-on-first-use fallback and no acceptance of an unverified Server certificate under any circumstance.
-- If Issue #10 finds the boot mechanism cannot provide sufficient authenticated fingerprint delivery, this Server-authentication mechanism must be revisited (see ADR-0005) without changing the WSS/typed-protocol transport decision automatically.
+- The Agent must fail closed when trustworthy bootstrap material — including the expected Server fingerprint — cannot be established through the trusted-bootstrap path: it must never fall back to an unverified Server certificate or proceed without one. This requirement, and the WSS/pinned-TLS/typed Agent Protocol decisions themselves, are unchanged by ADR-0010; ADR-0005 is not reopened.
 - Handshake sequence: Agent connects → Agent verifies the Server's pinned TLS fingerprint (mismatch aborts the connection immediately, no Agent Protocol message exchanged) → *(TLS Server-authentication succeeded)* → Agent sends `AuthRequest{credential}` → Server validates the credential against the Endpoint identity/credential state model (`docs/specifications/m0-endpoint-identity-lifecycle.md`) → Server responds `SessionEstablished{protocol_version, session_id}` or `AuthError{reason}`.
 - `AuthError` is exchanged only for application-level Agent Protocol authentication/handshake failures that occur **after** the TLS Server identity check has already succeeded — a rejected enrollment/runtime credential, or an incompatible `protocol_version` during the Agent Protocol handshake. It is never used for a fingerprint mismatch.
 
@@ -105,7 +105,8 @@ Cross-language conventions required to make this Specification independently imp
 - bulk data-transfer contract (Issue #6);
 - Administrative API / Browser-Server protocol — not decided by this Work Package;
 - heartbeat interval and other implementation-time tuning parameters;
-- the concrete boot mechanism delivering an authenticated Server fingerprint to the Agent — informed by, not decided by, Issue #10.
+- the concrete trusted-bootstrap and Server-fingerprint/bootstrap-material delivery contract binding site-specific data to the Secure-Boot-backed trusted chain (ADR-0010) — a dedicated, unresolved M0 contract requiring its own future Work Package, not designed by this Specification;
+- Secure Boot / firmware boot-chain mechanics themselves — an Adapter/Boot Port concern (`docs/specifications/m0-stack-and-boundaries-baseline.md`), not this Specification's scope.
 
 ## Acceptance criteria
 
@@ -136,6 +137,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 
 - ADR-0005 — Agent control-plane protocol and typed-action model (`Accepted`).
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (credential this handshake validates).
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — establishes `trusted bootstrap established` as the security property the Server-fingerprint delivery requirement above depends on; does not itself define the fingerprint-delivery contract.
 
 ## Related work
 
@@ -144,12 +146,12 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - Issue #4 — `[WP] Define Job lifecycle and scheduling model` (Job/action authorization, retry policy, resumption policy; consumes `StatusQuery`/`ActionDispatch`).
 - Issue #6 — `[WP] Define data-plane and storage contracts` (bulk transfer bytes, distinct from `ActionProgress` metadata).
 - Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this protocol's scenarios).
-- Issue #10 — `[Spike] Validate Secure Boot and hardened boot chain` (informs whether the boot mechanism can deliver an authenticated Server fingerprint to the Agent).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; established Secure Boot as the V1 `trusted bootstrap established` baseline). The concrete Server-fingerprint/bootstrap-material delivery contract remains a separate, dedicated, unresolved M0 contract (see "Open questions").
 
 ## Open questions
 
 1. Heartbeat interval and connection-liveness tuning — implementation-time detail.
 2. Whether the Administrative API (Browser-Server) should reuse any envelope conventions from this protocol — not decided, out of scope for M0's Issue #3.
-3. The concrete authenticated boot mechanism for fingerprint delivery — depends on Issue #10's evidence, not decided here.
+3. The concrete trusted-bootstrap and Server-fingerprint/bootstrap-material delivery contract — Issue #10/ADR-0010 established that Secure Boot is practically viable and is the V1 baseline for executable boot-chain trust, but did not itself define how site-specific fingerprint/enrollment data is authenticated and bound to that trusted chain. This remains a dedicated, unresolved M0 contract requiring its own future Work Package, not decided here.
 
 Status: Approved.

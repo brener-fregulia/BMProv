@@ -16,7 +16,7 @@ Determine the practical constraints and viable approaches for Secure Boot or an 
 
 ## Environment scoping decision
 
-As with Issue #8, the owner was asked how to scope this Spike given its own "likely requires Integration Environment access" caveat. The owner authorized a **local virtualized approximation**: VirtualBox 7.2.14 genuinely supports Secure Boot enforcement (`VBoxManage modifynvram`), using the same standard Microsoft certificate template (PK/KEK/db) that real OEM firmware ships by default — not a synthetic or Bamep-specific trust store. All results below are recorded explicitly as **virtualized-firmware evidence**, not a substitute for physical Integration Environment validation, consistent with `docs/development/testing.md`'s caution about UEFI/firmware behavior.
+As with Issue #8, the owner was asked how to scope this Spike given its own "likely requires Integration Environment access" caveat. The owner authorized a **local virtualized approximation**: VirtualBox 7.2.14 genuinely supports Secure Boot enforcement (`VBoxManage modifynvram`), configured with VirtualBox's own built-in Microsoft-trusting defaults. This is a **representative Microsoft-trusting Secure Boot configuration suitable for this virtualized experiment** — it is **not** evidence that the complete trust store, dbx/revocation state, or Platform Key exactly matches any particular OEM firmware; real hardware vendors curate their own PK, and their db/dbx/revocation state can differ from VirtualBox's defaults in ways this experiment does not observe. All results below are recorded explicitly as **virtualized-firmware evidence**, not a substitute for physical Integration Environment validation, consistent with `docs/development/testing.md`'s caution about UEFI/firmware behavior. Physical OEM firmware validation remains required before any production conclusion.
 
 ## Method
 
@@ -29,7 +29,7 @@ VBoxManage modifynvram "BamepSpike-WinPE-UEFI" enrollorclpk
 VBoxManage modifynvram "BamepSpike-WinPE-UEFI" secureboot --enable
 ```
 
-`enrollmssignatures` enrolls VirtualBox's built-in copies of the standard Microsoft KEK and db/dbx certificates (the Microsoft Corporation UEFI CA / Windows Production CA chain found in real OEM firmware defaults). `enrollorclpk` enrolls VirtualBox's own default Platform Key (PK) — the PK identifies the platform owner (here, VirtualBox/Oracle's default), not Microsoft; this is analogous to an OEM's own PK on physical hardware, which coexists with the Microsoft-issued KEK/db entries that actually validate Microsoft- and vendor-signed bootloaders. Confirmed active via `VBoxManage showvminfo --machinereadable | grep -i secureboot` → `SecureBoot="on"` before and after every scenario below.
+`enrollmssignatures` enrolls VirtualBox's own built-in copies of its Microsoft KEK and db/dbx defaults (VirtualBox's packaged representation of the Microsoft Corporation UEFI CA / Windows Production CA chain, not a copy sourced from or verified against any specific physical firmware). `enrollorclpk` installs the Oracle/VirtualBox Platform Key (PK) — the PK identifies the platform owner (here, VirtualBox/Oracle's default), not Microsoft; on physical hardware the OEM's own PK plays this role, coexisting with whatever Microsoft-issued KEK/db entries that OEM chose to preload. Together these provide a representative Microsoft-trusting Secure Boot configuration suitable for this virtualized experiment — not a verified match to any particular OEM firmware's exact trust store. Confirmed active via `VBoxManage showvminfo --machinereadable | grep -i secureboot` → `SecureBoot="on"` before and after every scenario below.
 
 Boot observation used the same method as Issue #8: headless VM, `VBoxManage controlvm screenshotpng` at timed intervals, `keyboardputstring`/`keyboardputscancode` for interactive commands.
 
@@ -37,7 +37,7 @@ Boot observation used the same method as Issue #8: headless VM, `VBoxManage cont
 
 **Target:** the unmodified stock WinPE UEFI ISO from Issue #8's original experiment (`BamepWinPE-amd64.iso`) — ADK 10.1.26100.2454, WinPE build 10.0.26100.1, `EFI\Boot\bootx64.efi` = the Windows Boot Manager as shipped by Microsoft's Windows ADK, unmodified.
 
-**Trust store relevant to this scenario:** the enrolled Microsoft KEK/db chain (`enrollmssignatures`) — this is exactly the certificate chain the Windows Boot Manager is signed against in production.
+**Trust store relevant to this scenario:** the enrolled Microsoft KEK/db chain (`enrollmssignatures`) — VirtualBox's built-in representation of the Microsoft certificate chain the Windows Boot Manager is signed against, not independently verified here against any specific OEM firmware's actual enrolled certificates.
 
 **Result:** boot succeeded, indistinguishable in timing and behavior from the non-Secure-Boot baseline in `docs/reference/winpe-boot-mechanism-spike.md` — `wpeinit` reached at ~15 seconds, fully initialized elevated shell (`Administrator: X:\windows\system32\cmd.exe`) at ~30 seconds. No rejection, no warning, no fail-closed message. **This is the expected, positive result**: Microsoft-signed code validates cleanly against the standard db chain.
 
@@ -88,7 +88,7 @@ The owner asked whether an accepted Secure Boot chain could provide a trustworth
 
 ## Conclusion
 
-Secure Boot enforcement, using the standard default Microsoft trust store, behaves correctly and predictably in this virtualized environment: it cleanly accepts already-Microsoft-signed code (Scenario 1), cleanly and unambiguously rejects unsigned code with a distinct fail-closed error (Scenario 2), and cleanly accepts a legitimate two-stage signed chain built from off-the-shelf distribution packages (Scenario 3). This is evidence that Secure Boot is **practically viable** for Bamep's UEFI x86-64 target, should the owner decide to require it — no fundamental obstacle was found. Whether Secure Boot should be *required* for Bamep remains an owner/architectural decision this Spike does not make; the evidence here is offered as input to that decision, not a substitute for it.
+Secure Boot enforcement, using VirtualBox's representative Microsoft-trusting default configuration, behaves correctly and predictably in this virtualized environment: it cleanly accepts already-Microsoft-signed code (Scenario 1), cleanly and unambiguously rejects unsigned code with a distinct fail-closed error (Scenario 2), and cleanly accepts a legitimate two-stage signed chain built from off-the-shelf distribution packages (Scenario 3). This is evidence that Secure Boot is **practically viable** for Bamep's UEFI x86-64 target, should the owner decide to require it — no fundamental obstacle was found. Whether Secure Boot should be *required* for Bamep remains an owner/architectural decision this Spike does not make; the evidence here is offered as input to that decision, not a substitute for it.
 
 ## Remaining uncertainty
 

@@ -72,8 +72,9 @@ Before any destructive operation executes against an Endpoint, **all** of the fo
 4. **Sufficiently fresh inventory** — the inventory revision the operation was authorized against matches the Endpoint's current inventory revision.
 5. **Target disk identity/fingerprint revalidation** — the target disk/volume identity/fingerprint matches what the operation was authorized against, revalidated immediately before execution.
 6. **Hardware confidence is sufficiently trusted** — the confidence dimension is `Consistent`. Both `LoweredConfidence` and `Conflict` block destructive execution until the confidence issue has been resolved through explicit operator review or revalidation; for this precondition the two levels are not treated differently, even though they differ for reconnect, renewal, and non-destructive activity (see "Hardware/identity-confidence state" and "Reconnect / credential renewal handling" above).
+7. **Trusted current bootstrap context** — the current Agent boot/session must be anchored in a bootstrap context whose integrity/authenticity has been established, per `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`'s `trusted bootstrap established` security property (Secure Boot is the V1 baseline mechanism for the executable boot-chain integrity that property depends on). This is independent of precondition 2: a valid, active Agent credential proves the Agent authenticated successfully over the current session — it does not prove that the boot path leading to this session was itself trusted, since credential issuance and boot-chain trust are established by different mechanisms at different times. This Specification does not name this precondition `SecureBootEnabled`, does not require Domain code to inspect firmware state, and does not define the concrete representation/state machine for the trusted-bootstrap fact — that belongs to the dedicated future trusted-bootstrap contract (ADR-0010 "Related work"); this precondition only establishes that the fact must exist and must gate destructive execution.
 
-Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition set is normative for Issues #4 and #6, which should reference it directly rather than re-derive or narrow it to a single check.
+Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition set is normative for Issues #4 and #6, which should reference it directly rather than re-derive or narrow it to a single check. **Precondition 7 is newly added by ADR-0010** and extends the six-item set those Specifications already reference by number (`docs/specifications/m0-job-lifecycle-and-scheduling.md` "Destructive dispatch preconditions"); incorporating it into their own composed precondition lists is a follow-up amendment those documents still need, not made by this Specification.
 
 ## Reconnect / credential renewal handling
 
@@ -97,30 +98,34 @@ Owner decision: once an Endpoint has been explicitly enrolled, normal reconnects
 
 - Endpoint identity lifecycle, credential/session lifecycle, and hardware-confidence state are defined as independent dimensions, satisfying Issue #2's acceptance criterion for "a Specification defining the identity lifecycle" and correcting the earlier single-state-machine conflation identified during owner review.
 - The Endpoint identity lifecycle contains exactly four states (`(no record)`, `PendingEnrollment`, `Enrolled`, `Retired`); pre-authorized enrollment is modeled as a separate future enrollment-authorization mechanism, not a fifth identity state.
-- Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check; both `LoweredConfidence` and `Conflict` block destructive execution.
+- Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check; both `LoweredConfidence` and `Conflict` block destructive execution; trusted-bootstrap context (precondition 7) is independent of credential validity — a valid Agent credential does not prove the current boot path was itself trusted.
 - Reconnect/credential-renewal behavior matches the owner's continuity decision (no repeated approval when continuity holds, and `LoweredConfidence` alone does not interrupt continuity even though it blocks destructive execution).
 
 ## Validation expectations
 
-Automated: none produced directly by this Work Package (decision/specification work). Once identity/enrollment is implemented, expected validation includes domain tests for each dimension's transitions independently (valid and rejected transitions, per `docs/development/testing.md` "Unit and domain tests"), tests covering combined states (e.g., `Enrolled` + `CredentialExpired` + `LoweredConfidence`), and negative cases demonstrating that a `Conflict` confidence state or a non-`Enrolled`/non-`CredentialActive` Endpoint rejects destructive operations. Per `docs/development/testing.md` "Local development environments," such domain and integration tests are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
+Automated: none produced directly by this Work Package (decision/specification work). Once identity/enrollment is implemented, expected validation includes domain tests for each dimension's transitions independently (valid and rejected transitions, per `docs/development/testing.md` "Unit and domain tests"), tests covering combined states (e.g., `Enrolled` + `CredentialExpired` + `LoweredConfidence`), and negative cases demonstrating that a `Conflict` confidence state or a non-`Enrolled`/non-`CredentialActive` Endpoint rejects destructive operations. Future negative tests must also cover destructive-operation rejection when trusted bootstrap (precondition 7) is not established, including the case of an otherwise fully valid `Enrolled` + `CredentialActive` + `Consistent` Endpoint whose current session cannot be shown to have a trusted bootstrap context — destructive execution must still be blocked. Per `docs/development/testing.md` "Local development environments," such domain and integration tests are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
 
 Manual: owner approval of this Specification and ADR-0004 — both confirmed (see Status).
 
 ## Related ADRs
 
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (`Accepted`; operator-approval-gated first enrollment is the M0 default).
+- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of precondition 7 (`trusted bootstrap established`).
 
 ## Related work
 
 - Issue #2 — `[WP] Define endpoint identity and trust model`.
 - Issue #3 — `[WP] Define Agent control and action contracts` (mutual-authentication mechanism establishing `CredentialActive`).
-- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (owns Job/action authorization semantics and destructive-step resumption; consumes the preconditions above).
-- Issue #6 — `[WP] Define data-plane and storage contracts` (consumes the destructive-operation authorization preconditions).
+- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (owns Job/action authorization semantics and destructive-step resumption; consumes the preconditions above — needs a follow-up amendment to incorporate precondition 7 into its own composed six-item precondition set).
+- Issue #6 — `[WP] Define data-plane and storage contracts` (consumes the destructive-operation authorization preconditions — same follow-up amendment need as Issue #4).
+- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; source of precondition 7).
 
 ## Open questions
 
 1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, whether escalation between them can ever be automatic, and the exact mechanics of "explicit revalidation" — implementation-time policy, not an M0 architectural blocker.
 2. Exact credential TTL/renewal policy — implementation-time detail, intentionally left unresolved here.
 3. Design of the future pre-authorized enrollment mechanism (token format, scope, expiry, issuance UX) — explicitly not required for M0.
+4. The concrete representation/state machine for the trusted-bootstrap fact (precondition 7), and the full trusted-bootstrap/Server-fingerprint-delivery contract — owned by a dedicated future M0 Work Package (ADR-0010 "Related work"), not decided here.
+5. The follow-up amendment to `docs/specifications/m0-job-lifecycle-and-scheduling.md` and `docs/specifications/m0-data-plane-and-storage-contracts.md` incorporating precondition 7 into their own composed precondition sets — not made by this Specification, requires separate owner authorization.
 
 Status: Approved.
