@@ -76,7 +76,7 @@ Before any destructive operation executes against an Endpoint, **all** of the fo
 6. **Hardware confidence is sufficiently trusted** — the confidence dimension is `Consistent`. Both `LoweredConfidence` and `Conflict` block destructive execution until the confidence issue has been resolved through explicit operator review or revalidation; for this precondition the two levels are not treated differently, even though they differ for reconnect, renewal, and non-destructive activity (see "Hardware/identity-confidence state" and "Reconnect / credential renewal handling" above).
 7. **Trusted current bootstrap context** — the current Agent boot/session must be anchored in a bootstrap context whose integrity/authenticity has been established, per `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`'s `trusted bootstrap established` security property (Secure Boot is the V1 baseline mechanism for the executable boot-chain integrity that property depends on). This is independent of precondition 2: a valid, active Agent credential proves the Agent authenticated successfully over the current session — it does not prove that the boot path leading to this session was itself trusted, since credential issuance and boot-chain trust are established by different mechanisms at different times. This Specification does not name this precondition `SecureBootEnabled`, does not require Domain code to inspect firmware state, and does not define the concrete representation/state machine for the trusted-bootstrap fact — that belongs to the dedicated future trusted-bootstrap contract (ADR-0010 "Related work"); this precondition only establishes that the fact must exist and must gate destructive execution.
 
-Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This precondition set is normative for Issues #4 and #6, which should reference it directly rather than re-derive or narrow it to a single check. **Precondition 7 is newly added by ADR-0010** and extends the six-item set those Specifications already reference by number (`docs/specifications/m0-job-lifecycle-and-scheduling.md` "Destructive dispatch preconditions"); incorporating it into their own composed precondition lists is a follow-up amendment those documents still need, not made by this Specification.
+Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This seven-item precondition set is normative for Issues #4 and #6, which reference it directly rather than re-deriving or narrowing it to a single check. **Precondition 7 was added by ADR-0010** and is already fully composed: `docs/specifications/m0-job-lifecycle-and-scheduling.md` "Destructive dispatch preconditions" lists and revalidates all seven preconditions before destructive dispatch, and `docs/specifications/m0-data-plane-and-storage-contracts.md` treats its Artifact-specific gates as additive to this complete set, including precondition 7, without duplicating it. No follow-up amendment for this alignment remains open.
 
 ## Reconnect / credential renewal handling
 
@@ -118,8 +118,8 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 
 - Issue #2 — `[WP] Define endpoint identity and trust model`.
 - Issue #3 — `[WP] Define Agent control and action contracts` (mutual-authentication mechanism establishing `CredentialActive`).
-- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (owns Job/action authorization semantics and destructive-step resumption; consumes the preconditions above — needs a follow-up amendment to incorporate precondition 7 into its own composed six-item precondition set).
-- Issue #6 — `[WP] Define data-plane and storage contracts` (consumes the destructive-operation authorization preconditions — same follow-up amendment need as Issue #4).
+- Issue #4 — `[WP] Define Job lifecycle and scheduling model` (owns Job/action authorization semantics and destructive-step resumption; already composes and revalidates the full seven-item precondition set above).
+- Issue #6 — `[WP] Define data-plane and storage contracts` (already treats its Artifact-specific gates as additive to the full seven-item precondition set above, without duplicating it).
 - Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; source of precondition 7).
 
 ## Open questions
@@ -128,6 +128,5 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 2. Exact credential TTL/renewal policy — implementation-time detail, intentionally left unresolved here.
 3. Design of the future pre-authorized enrollment mechanism (token format, scope, expiry, issuance UX) — explicitly not required for M0.
 4. The concrete representation/state machine for the trusted-bootstrap fact (precondition 7), and the full trusted-bootstrap/Server-fingerprint-delivery contract — owned by a dedicated future M0 Work Package (ADR-0010 "Related work"), not decided here.
-5. The follow-up amendment to `docs/specifications/m0-job-lifecycle-and-scheduling.md` and `docs/specifications/m0-data-plane-and-storage-contracts.md` incorporating precondition 7 into their own composed precondition sets — not made by this Specification, requires separate owner authorization.
 
 Status: Approved.
