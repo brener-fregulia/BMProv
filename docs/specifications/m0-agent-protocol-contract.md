@@ -30,6 +30,18 @@ After Agent Protocol authentication succeeds (`SessionEstablished`), the Agent s
 - `boot_nonce` also serves as the boot-context correlator: the Server associates an accepted result with the current Endpoint boot context via this value. A WSS reconnect within the same boot context may re-present the same `boot_nonce`/assertion for the Server to re-correlate/reconfirm; a new one is not required merely because the socket changed. A genuine reboot produces a new `boot_nonce` and requires newly-established evidence.
 - Missing, malformed, invalid-signature, nonce-mismatched, or otherwise rejected evidence leaves the Server-side `trusted bootstrap` fact `NotEstablished` for that boot context and fails closed — no destructive dispatch may satisfy destructive-operation precondition 7 (`docs/specifications/m0-endpoint-identity-lifecycle.md`) before this evidence is accepted.
 
+## Transfer authorization
+
+After `SessionEstablished`, and after `ActionAck{outcome: Accepted}` for a data-plane transfer action, the Agent may request the short-lived, transfer-scoped authorization capability required to use the HTTPS data-plane channel (`docs/decisions/0008-data-plane-transport-chunking-and-resumability.md` point 9; `docs/specifications/m0-data-plane-and-storage-contracts.md` "Transfer-session authentication", Issue #15).
+
+**This does not change WSS, pinned-TLS verification, `AuthRequest`/`SessionEstablished` semantics, `BootstrapEvidence`, or the general Agent-action envelope, and does not reopen ADR-0005.** Bulk Artifact bytes are still never carried by Agent Protocol — only the small authorization capability is, over the same pattern already used for any other action-specific data.
+
+- `TransferAuthorizationRequest{transfer_id}` — Agent → Server. May be sent any time the Agent holds a currently-authenticated session and believes `transfer_id` denotes a still-legitimate, non-terminal transfer it is authorized to act on — including as a **renewal** request for a `transfer_id` whose previous authorization has expired. A renewal request is not a retry and does not create a new Attempt.
+- `TransferAuthorizationGrant{transfer_id, token, expires_at}` — Server → Agent. Sent only after the Server independently confirms a non-terminal Attempt exists for `transfer_id`, bound to the requesting Endpoint, with `CredentialActive`. `token` is an opaque, Server-signed bearer capability from this protocol's perspective — its internal structure is owned by `docs/specifications/m0-data-plane-and-storage-contracts.md`, not redefined here.
+- `TransferAuthorizationDenied{transfer_id, reason}` — Server → Agent. `reason` is intentionally a minimal, non-enumerable value for M0 (a single closed value is sufficient); this message must not let a requester distinguish "unknown transfer_id" from "wrong Endpoint" from "transfer already terminal" from any other internal cause — see `m0-data-plane-and-storage-contracts.md` "Revocation and fail-closed behavior" for why.
+
+The token is presented on the separate HTTPS data-plane channel, never over Agent Protocol itself, exactly as bulk chunk bytes never are.
+
 ## Message envelope
 
 Every message includes:
@@ -55,6 +67,7 @@ Every message includes:
 
 - `AuthRequest` / `SessionEstablished` / `AuthError` — handshake (see above). `AuthError` is used **only** for application-level Agent Protocol authentication/handshake failures occurring after the TLS Server identity check has already succeeded — a rejected enrollment/runtime credential, or an incompatible `protocol_version` during the handshake. A TLS fingerprint mismatch is never reported as `AuthError`; it is a connection-level abort before any Agent Protocol message is exchanged. Protocol-level violations after a session is established use `ProtocolError` instead (see below).
 - `BootstrapEvidence{boot_nonce, bootstrap_assertion, local_boot_trust: Established}` — Agent → Server, one-way, sent only after `SessionEstablished`. Carries the Server-observable representation of the locally-established trusted-bootstrap fact; see "Trusted bootstrap evidence" above for full semantics, independent Server-side verification requirements, and boot-context correlation via `boot_nonce`. `bootstrap_assertion` is an opaque value from this protocol's perspective — its internal structure is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, not redefined here. `local_boot_trust` is a closed vocabulary with a single defined M0 value, `Established` — a local failure to establish trusted bootstrap already prevents the Agent from reaching this point in the sequence, so no other value is sent in M0.
+- `TransferAuthorizationRequest{transfer_id}` / `TransferAuthorizationGrant{transfer_id, token, expires_at}` / `TransferAuthorizationDenied{transfer_id, reason}` — see "Transfer authorization" above.
 - `ActionDispatch{action_id, action_type, action_version, parameters, retry_of?}` — Server → Agent; requests execution of a typed action.
 - `ActionAck{action_id, outcome: Accepted|Rejected, error?}` — Agent → Server; confirms whether a dispatch was accepted for execution or rejected before execution (e.g., unknown or malformed `action_type`), distinct from completion. A `Rejected` dispatch never executed and must never be represented as an `ActionResult` with outcome `Failed` — no execution occurred, so there is no result to report, only a rejection reason.
 - `ActionProgress{action_id, percent?, bytes_processed?, eta?}` — Agent → Server; periodic progress metadata for long-running actions. Bulk transfer bytes are not carried here (data-plane, Issue #6).
@@ -119,7 +132,7 @@ Cross-language conventions required to make this Specification independently imp
 
 - concrete `action_type` catalog — owned by the Work Packages that introduce each operation;
 - Job/action authorization semantics and destructive-step resumption/retry policy (Issue #4);
-- bulk data-transfer contract (Issue #6);
+- bulk data-transfer contract, including the HTTPS data-plane channel itself, chunk transfer, and the internal structure of the transfer-authorization `token` (Issue #6/#15, `docs/specifications/m0-data-plane-and-storage-contracts.md`) — this Specification defines only how the authorization *request/grant/denial* is carried over Agent Protocol, not how the token is used or verified on the data plane;
 - Administrative API / Browser-Server protocol — not decided by this Work Package;
 - heartbeat interval and other implementation-time tuning parameters;
 - the internal structure/format of `bootstrap_assertion`, and how it is produced/authenticated — owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`; this Specification only defines how the already-produced evidence is carried over Agent Protocol, not how it is produced;
@@ -147,6 +160,7 @@ Per `docs/development/testing.md` "Contract tests", expected coverage once imple
 - `StatusQuery` for an `action_id` the Agent has no record of (`Unknown`, not treated as "not executed");
 - missing/timed-out `ActionAck` treated as an uncertain outcome, not as proof of non-delivery, and not triggering automatic redispatch;
 - `BootstrapEvidence` handling: a valid signed assertion with matching `boot_nonce` is accepted and correlated to the current boot context; an invalid signature is rejected; a nonce mismatch (replay) is rejected; missing evidence leaves trusted bootstrap `NotEstablished`; a reconnect re-presenting the same `boot_nonce`/assertion within the same boot context is accepted/reconciled without requiring new evidence; evidence sent before `SessionEstablished` is rejected.
+- `TransferAuthorizationRequest`/`Grant`/`Denied` handling: a request for a `transfer_id` with a legitimate non-terminal Attempt bound to the requesting Endpoint and `CredentialActive` is granted; a request for an unknown, another-Endpoint's, or already-terminal `transfer_id` is denied with the single generic `reason` value, never a case-distinguishing one; a renewal request for the same `transfer_id` after a prior grant's `expires_at` has passed is accepted and does not require a new Attempt; a request sent before `SessionEstablished` is rejected.
 
 Per `docs/development/testing.md` "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows), not asserted as correct from native-Windows execution alone.
 
@@ -155,8 +169,9 @@ Manual: owner approval of this Specification — confirmed (see Status).
 ## Related ADRs
 
 - ADR-0005 — Agent control-plane protocol and typed-action model (`Accepted`).
-- ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (credential this handshake validates).
+- ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (credential this handshake validates; `CredentialActive`/`CredentialRevoked` transfer-authorization issuance checks).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — establishes `trusted bootstrap established` as the security property `BootstrapEvidence` makes Server-observable.
+- ADR-0008 — Data-plane transport, chunking, and resumability strategy (`Accepted`) — point 9 is the decision `TransferAuthorizationRequest`/`Grant`/`Denied` carry over this protocol.
 
 ## Related work
 
@@ -164,9 +179,10 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - Issue #2 — `[WP] Define endpoint identity and trust model` (ADR-0004, credential validated during handshake).
 - Issue #4 — `[WP] Define Job lifecycle and scheduling model` (Job/action authorization, retry policy, resumption policy; consumes `StatusQuery`/`ActionDispatch`).
 - Issue #6 — `[WP] Define data-plane and storage contracts` (bulk transfer bytes, distinct from `ActionProgress` metadata).
-- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this protocol's scenarios, including `BootstrapEvidence`).
+- Issue #15 — `[WP] Define authenticated data-plane transfer-session binding` — added `TransferAuthorizationRequest`/`Grant`/`Denied` additively, without reopening WSS, pinned TLS, `AuthRequest`/`SessionEstablished`, or `BootstrapEvidence`.
+- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this protocol's scenarios, including `BootstrapEvidence` and transfer authorization).
 - Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; established Secure Boot as the V1 `trusted bootstrap established` baseline).
-- Issue #13 — `[WP] Define trusted bootstrap and Server fingerprint delivery contract` (`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, `Proposed`) — accepted the nonce-bound signed bootstrap assertion (C) and the authenticated Agent bootstrap report (D) this `BootstrapEvidence` message carries; site trust-anchor provisioning (B) remains the sole unresolved blocker there, not affecting this amendment.
+- Issue #13 / ADR-0011 — `[WP] Define trusted bootstrap and Server fingerprint delivery contract` (`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`, `Approved`) — accepted the nonce-bound signed bootstrap assertion (C), the authenticated Agent bootstrap report (D) this `BootstrapEvidence` message carries, and site trust-anchor provisioning (B); complete, not affected by this amendment.
 
 ## Open questions
 

@@ -38,6 +38,111 @@ A manifest is not necessarily complete when a capture begins — requiring the c
 - Resume logic: before (re)transferring any chunk, the receiver checks whether it already holds a chunk at that index matching the manifest digest; if so, that chunk is skipped. Only missing or mismatching chunks are (re)transferred — directly implementing the pattern validated in `docs/reference/transfer-resumability-spike.md` Experiments C and D.
 - Chunk transfer direction is symmetric: the same manifest/verification pattern applies whether the Agent is producing (backup/capture) or consuming (provisioning/restore) the artifact.
 
+## Transfer-session authentication
+
+Accepted (ADR-0008 point 9, executing Issue #15): every data-plane transfer is authorized and authenticated by a **short-lived, transfer-scoped, Server-signed bearer capability**, delivered over the already-authenticated Agent Protocol control-plane channel and presented on the HTTPS data-plane channel. This section is the full operational contract; ADR-0008 records the decision and its rationale.
+
+### Transport
+
+The data plane is **HTTPS**, not plain HTTP. Server identity reuses the same pinned Server TLS certificate/fingerprint already authenticated for the Agent Protocol WSS connection via trusted bootstrap (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`, `docs/decisions/0011-site-trust-anchor-operator-verified-pairing.md`) — no second trust relationship is introduced, and no new site trust-anchor question is reopened. The Agent does not present a client certificate; the data plane is not mTLS, consistent with Agent Protocol (`m0-agent-protocol-contract.md` "Transport and handshake").
+
+### Authorization bindings
+
+One authorization capability is bound to exactly:
+
+- `endpoint_id`;
+- `transfer_id`;
+- `artifact_id`;
+- direction (Agent → Server, or Server → Agent);
+- `attempt_id` of the transfer JobStep's Attempt (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`) that caused it to be issued.
+
+No other identifier is bound merely because it exists — `job_id`/`jobstep_id` are reachable transitively through `attempt_id` and are not separately embedded. A capability authorizes only the exact `(endpoint_id, transfer_id, artifact_id, direction)` tuple it was issued for; it never authorizes another transfer, another Artifact, the opposite direction, or another Endpoint, even for the same Agent session.
+
+### Issuance sequence
+
+```text
+1. Agent is authenticated over Agent Protocol (SessionEstablished,
+   BootstrapEvidence already sent) — unchanged.
+2. The transfer JobStep's Attempt is dispatched normally via
+   ActionDispatch{action_id, action_type, parameters: {transfer_id,
+   artifact_id, direction, ...}} — unchanged Job/Attempt dispatch flow
+   (ADR-0006, ADR-0007 persist-before-send), no special-casing.
+3. Agent sends ActionAck{outcome: Accepted}.
+4. Agent sends TransferAuthorizationRequest{transfer_id} over the
+   already-authenticated control-plane connection.
+5. Server checks: does a non-terminal Attempt exist for this
+   transfer_id, bound to the requesting Endpoint's identity/session,
+   and is the Endpoint's credential CredentialActive?
+     - yes → TransferAuthorizationGrant{transfer_id, token, expires_at}
+     - no  → TransferAuthorizationDenied{transfer_id, reason}
+6. Agent opens the HTTPS data-plane connection and presents the token
+   with each chunk request alongside transfer_id/artifact_id.
+7. Server revalidates the token and current durable state on every
+   chunk request (see "Chunk-request revalidation" below); on success,
+   chunk transfer proceeds exactly as already specified in "Chunk
+   transfer" above.
+8. If the token expires, or the Agent no longer holds it (e.g. after
+   an Agent process restart) while the underlying transfer remains
+   legitimately active, the Agent repeats step 4 for the same
+   transfer_id — a renewal, never a new Attempt and never a new
+   transfer_id.
+```
+
+`TransferAuthorizationRequest`/`TransferAuthorizationGrant`/`TransferAuthorizationDenied` are new, strictly additive Agent Protocol v1 message types — see `docs/specifications/m0-agent-protocol-contract.md` "Transfer authorization". Their addition does not reopen WSS, pinned TLS, `AuthRequest`/`SessionEstablished`, or `BootstrapEvidence`.
+
+### Mechanism: why a signed capability, not the long-lived credential
+
+The capability is **self-verifying** (cryptographically signed by a Server-held signing secret) rather than looked up in a persisted session table, and is **never itself persisted as a durable, reusable secret** — only the *durable transfer binding* it is checked against (the bindings above, already part of the durable transfer record per ADR-0008 point 10) is durable. Every use is revalidated against that durable state, not merely against the token's own signature and expiry — this is what makes real-time revocation possible (a cancelled transfer, or a revoked credential, is denied immediately, even before the token's natural expiry) without a persisted blacklist.
+
+It is deliberately **not** derived from the Endpoint's long-lived Agent runtime credential: that would grant authority disproportionate to one transfer, and could not be revoked without collateral damage to the Endpoint's entire Agent session. See ADR-0008 "Alternatives considered" for the full evaluation against the rejected alternatives.
+
+### Lifetime and scope
+
+- Single `transfer_id`, single direction, single `artifact_id`, single `endpoint_id` — never reusable across any of those.
+- Reusable across any number of chunk requests belonging to the same transfer, within its validity window — not single-use-per-chunk.
+- Short-lived and bounded; renewable/reissuable for the same `transfer_id` under the conditions above. **Exact TTL is implementation-time** (see "Out of scope") — this Specification requires only that it be short-lived, bounded, and renewable, not a specific duration.
+- Denied for further use, and denied for renewal, once the transfer reaches a terminal state (`Verified` or `Failed`) or its owning Attempt is closed `Indeterminate` (`docs/specifications/m0-job-lifecycle-and-scheduling.md` "Reconciliation and the Indeterminate outcome") with no further Attempt authorized.
+
+### Chunk-request revalidation
+
+Every chunk request — not only the first — is revalidated against **current durable state**, in addition to the token's own signature/expiry check:
+
+- the transfer is not in a terminal state;
+- the `endpoint_id`/`artifact_id`/direction match the token's bindings exactly;
+- the Endpoint's credential is currently `CredentialActive` (not `CredentialRevoked`).
+
+**Critical invariant**: authorization renewal, or an expired/renewed token, never creates a new logical Artifact and never invalidates already-verified chunks. Token expiry and renewal affect only the authorization layer; `transfer_id`, the chunk manifest, and the chunk-resume logic in "Chunk transfer" above are completely unaffected — a chunk already durably received and matching its manifest digest remains valid and is never re-transferred merely because the security token was renewed.
+
+### Reconnect and restart behavior
+
+- **WSS disconnect while an HTTP(S) transfer continues**: the data-plane channel does not depend on the WSS socket remaining open. An already-issued, still-valid token remains usable. If the token expires before the Agent reconnects Agent Protocol, the Agent reconnects (unchanged existing reconnect handling, `m0-agent-protocol-contract.md` "Reconnect / stale-command handling") and then requests a fresh token for the same `transfer_id`.
+- **Agent reconnect**: standard existing Agent Protocol reconnect and Attempt reconciliation (`AwaitingReconciliation`, `StatusQuery`/`StatusReport`) apply unchanged, independent of data-plane token state. A data-plane token never substitutes for, or shortcuts, Attempt reconciliation.
+- **Agent process restart**: any token held only in Agent memory is lost; whether the Agent persists a token to disposable local staging state is implementation-time, not decided here. Once Agent Protocol reconciliation has re-established what the Agent's own local state is for the owning Attempt, if the transfer is still legitimate, the Agent requests a fresh token for the same `transfer_id`.
+- **Server restart**: does not invalidate outstanding, unexpired tokens by itself — verification is a signature check (using a Server-durable signing secret, not an in-memory-only session table) plus a durable-state lookup, both of which survive restart. The owning Attempt's actual current state (which may itself be `AwaitingReconciliation` after a Server restart, per ADR-0006) governs whether further use is still authorized — never assumed either way.
+- **Attempt `AwaitingReconciliation`**: an outstanding or renewed token remains usable while the owning Attempt is `AwaitingReconciliation` and not yet closed — reconciliation is reused, not duplicated, by this contract. Once the Attempt is closed `Indeterminate`, or reaches any terminal outcome, further authorization is denied (see "Lifetime and scope").
+
+### Revocation and fail-closed behavior
+
+Every case below fails closed, denying the request with a single generic outcome that does not reveal *which* specific check failed — this Specification does not distinguish these cases on the wire, to avoid cross-tenant/cross-Endpoint/cross-Artifact enumeration; the Server may record the specific internal reason in its own audit/diagnostic trail (`docs/specifications/m0-persistence-observability-and-domain-events.md`) without exposing it to the requester:
+
+- authorization absent, malformed, or cryptographically invalid;
+- expired;
+- issued for another `transfer_id`, `artifact_id`, `endpoint_id`, or direction than the one presented;
+- the transfer is already terminal;
+- the owning Attempt has been closed `Indeterminate` with no further Attempt authorized;
+- presented against the wrong Server (signature does not verify against this Server's signing secret);
+- the Endpoint's credential is no longer `CredentialActive` (explicit `CredentialRevoked` cascades to deny outstanding tokens for that Endpoint, even before their own expiry — see "Relationship with Agent session lifetime").
+
+### Relationship with Agent session lifetime
+
+A transient WSS control-plane disconnect is **not** authorization revocation — an already-issued, still-valid token remains usable for the duration of its own bounded lifetime, revalidated per request as above. This does not make the data plane an indefinitely reusable independent access channel: every token remains short-lived, single-transfer-scoped, and revalidated against durable state on every use. Authenticated Agent identity, current WebSocket presence, transfer authorization, and durable transfer state remain four distinct facts, never conflated: presence can drop without revoking authorization, but authorization can never outlive the durable transfer's own terminal state or an explicit credential revocation, regardless of presence.
+
+### Durable vs. transient authorization state (ADR-0007 boundary)
+
+**Durable**: the transfer's authorization bindings (`endpoint_id`, `transfer_id`, `artifact_id`, direction, `attempt_id`) — recorded once, as part of the same durable transfer record ADR-0008 point 10 already requires, not a separate write; the Server's token-signing secret (durable Server-side operational/configuration secret, exact storage mechanism implementation-time); an audit record of transfer-authorization issuance where the transfer feeds a destructive JobStep, reusing the already-established destructive-dispatch audit pattern (ADR-0007 point 6) rather than inventing new audit infrastructure.
+
+**Transient**: the individual issued token/capability itself. It is never separately persisted as a durable, reusable row — it is verified statelessly (signature + durable-state cross-check) at the moment of each use, consistent with "do not persist plaintext reusable secrets merely for convenience" (ADR-0007).
+
 ## Source reproducibility: M0/V1 offline maintenance capture
 
 If a chunk cannot be (re)produced to match its recorded digest — because the underlying source has changed since that chunk was identified, per `docs/reference/transfer-resumability-spike.md` Experiment E — that chunk transfer fails. This Specification requires that failure to be explicit (the chunk, and depending on the artifact's consistency requirements, the artifact itself, moves toward `Failed` — see "Artifact lifecycle"), never silently accepted or approximated, and the recorded digest is never rewritten to fit the changed source (see "Manifest construction and sealing").
@@ -137,7 +242,7 @@ Migration mechanics between roles, multi-copy consistency, and retention-duratio
 - the digest algorithm (`digest_algorithm` value) — an implementation/interoperability decision fixed before the concrete wire contract, not chosen here;
 - live-Windows backup and any snapshot/VSS/live-quiescing technology — explicitly outside V1 scope, not designed here;
 - the exact mechanism/component that positively confirms offline/read-only capture conditions to set `capture_consistency = Established` — not designed here;
-- transfer-session authentication mechanism (token format, issuance) — unresolved, constrained by Issues #2/#3 but not designed here (see "Related work");
+- exact transfer-authorization token TTL, concrete signature/wire format, and HTTP-level details (header names, status codes) — implementation-time, consistent with the pattern already established for `digest_algorithm` and chunk size; the mechanism, bindings, issuance sequence, and revocation semantics themselves are accepted (see "Transfer-session authentication");
 - the planned-hardware-change (disk-replacement) authorization mechanism — not designed here, remains for the identity Work Package's model;
 - exact schema/field set for Artifact source-provenance records — not decided here;
 - final production backup/snapshot format — explicitly out of M0 scope;
@@ -152,6 +257,7 @@ Migration mechanics between roles, multi-copy consistency, and retention-duratio
 - Storage capability model and artifact lifecycle invariants are defined (Issue #6 acceptance criterion).
 - Destructive operations have a specified safety invariant tying execution to artifact `Verified` state and, where applicable, `capture_consistency == Established` (Issue #6 acceptance criterion).
 - Multi-disk source provenance and the independence of source identity from destructive-target identity are represented (owner decision, disk-replacement use case).
+- Transfer-session authentication is fully specified — bindings, mechanism, TLS requirement, issuance sequence, lifetime/renewal, revocation/fail-closed behavior, and durable/transient state split (Issue #15 acceptance criterion; ADR-0008 point 9).
 
 ## Validation expectations
 
@@ -161,28 +267,33 @@ Per `docs/development/testing.md` "Unit and domain tests": Artifact lifecycle st
 
 Per `docs/development/testing.md` "Simulator": chunked transfer at the M0 20–24 concurrent-endpoint target, including interrupted/corrupted-chunk scenarios and a simulated source-mutation scenario reproducing `docs/reference/transfer-resumability-spike.md` Experiment E's finding (a missing chunk that cannot be honestly regenerated must be reported as failed, never silently substituted); a destructive JobStep must be rejected when `capture_consistency` is `NotEstablished` even if the artifact is `Verified`; a simulated disk-replacement scenario (source Artifact provenance from one disk identity, destructive target a different, newly installed disk identity) must succeed without requiring the two to match; a destructive JobStep must also be rejected when the Artifact is `Verified` and `capture_consistency` is `Established` but the independent trusted-bootstrap precondition (`docs/specifications/m0-endpoint-identity-lifecycle.md` precondition 7) is not established — a fully valid, verified Artifact never by itself authorizes destructive use.
 
+Per `docs/development/testing.md` "Simulator" and "Security-negative tests" (Transfer-session authentication, Issue #15): a valid authorized transfer completing normally; a chunk request with missing authorization rejected; a token for another Endpoint rejected; a token for another `transfer_id` rejected; a token for another Artifact rejected; a token presented for the wrong direction rejected; an expired or explicitly-revoked-via-`CredentialRevoked` token rejected; replay of a token after its owning transfer reached a terminal state rejected; a legitimately interrupted transfer obtaining a renewed token and resuming without re-transferring already-verified chunks and without a new `transfer_id`; a WSS reconnect that does not, by itself, grant or imply a new authorization; all of the above exercised concurrently across 20–24 Simulated Endpoints with independent transfer authorization. Per the Simulator's already-accepted real-transport fidelity rule (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Simulator fidelity boundary"), these scenarios exercise the real `TransferAuthorizationRequest`/`Grant`/`Denied` messages and real per-request revalidation — the Simulator must not bypass transfer authorization merely because it is a Simulator.
+
+Per `docs/development/testing.md` "Contract tests" (Transfer-session authentication): `TransferAuthorizationRequest`/`Grant`/`Denied` serialization per the wire-encoding conventions in `m0-agent-protocol-contract.md`; a request for an unknown or another Endpoint's `transfer_id` denied without revealing which case applied; token signature verification — valid accepted, tampered/invalid rejected — as contract-level negative cases, without selecting a concrete signing algorithm or library here.
+
 Per "Local development environments," these are expected to run in the Linux reference environment (WSL2 or containers from Windows).
 
-Manual: owner approval of this Specification — confirmed (see Status). Remaining open items (chunk size, `digest_algorithm` selection, live-Windows backup consistency, the concrete mechanism establishing `capture_consistency = Established`, the authenticated data-plane transfer binding, disk-replacement authorization, and Artifact source-provenance schema) are explicitly non-blocking implementation/future-work detail, not unresolved architecture.
+Manual: owner approval of this Specification — confirmed (see Status). Remaining open items (chunk size, `digest_algorithm` selection, live-Windows backup consistency, the concrete mechanism establishing `capture_consistency = Established`, exact transfer-authorization token TTL/wire format, disk-replacement authorization, and Artifact source-provenance schema) are explicitly non-blocking implementation/future-work detail, not unresolved architecture.
 
 ## Related ADRs
 
-- ADR-0008 — Data-plane transport, chunking, and resumability strategy (`Accepted`).
-- ADR-0004 — Endpoint identity (destructive-operation preconditions consuming artifact `Verified`/`capture_consistency` state; target-disk identity revalidation independent of Artifact source provenance).
-- ADR-0006 — Job/JobStep/Attempt model (revalidation before dispatch consuming artifact state; retry policy for `Failed` artifacts).
-- ADR-0007 — Persistence backend and durable/transient boundary (artifact/manifest durability; `transfer_id` correlation).
-- ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of the trusted-bootstrap precondition this Specification's Artifact gates are additive to, not a substitute for.
+- ADR-0008 — Data-plane transport, chunking, and resumability strategy (`Accepted`), including point 9's transfer-session authentication decision this Specification details.
+- ADR-0004 — Endpoint identity (destructive-operation preconditions consuming artifact `Verified`/`capture_consistency` state; target-disk identity revalidation independent of Artifact source provenance; `CredentialActive`/`CredentialRevoked` transfer-authorization revalidation checks against).
+- ADR-0006 — Job/JobStep/Attempt model (revalidation before dispatch consuming artifact state; retry policy for `Failed` artifacts; Attempt reconciliation reused by transfer-authorization lifetime).
+- ADR-0007 — Persistence backend and durable/transient boundary (artifact/manifest durability; `transfer_id` correlation; durable-vs-transient split for transfer-authorization state).
+- ADR-0010 / ADR-0011 — Trusted bootstrap and site trust-anchor baseline (`Accepted`) — source of the trusted-bootstrap precondition this Specification's Artifact gates are additive to; also source of the pinned Server TLS identity the data-plane HTTPS requirement reuses.
 
 ## Related work
 
 - Issue #6 — `[WP] Define data-plane and storage contracts`.
 - Issue #9 — `[Spike] Evaluate resumable volume/image transfer` (evidence this Specification applies).
 - Issue #8 — `[Spike] Validate WinPE boot mechanism` (validates the boot mechanism only; may later constrain, but does not itself resolve, the open source-consistency requirement).
-- Issue #2 / ADR-0004, Issue #3 / ADR-0005 — constrain, but do not themselves resolve, transfer-session authentication; also own target-disk identity revalidation and the Endpoint identity model any future disk-replacement authorization would extend.
+- Issue #15 — `[WP] Define authenticated data-plane transfer-session binding` (resolves transfer-session authentication; see "Transfer-session authentication").
+- Issue #2 / ADR-0004, Issue #3 / ADR-0005 — constrain, and (with Issue #15) now resolve, transfer-session authentication; also own target-disk identity revalidation and the Endpoint identity model any future disk-replacement authorization would extend.
 - Issue #4 / ADR-0006 — Attempt model; destructive-operation revalidation.
 - Issue #5 / ADR-0007 — persistence of artifact/manifest state.
-- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this contract).
-- Issue #10 / ADR-0010 — `[Spike] Validate Secure Boot and hardened boot chain` (complete; source of the trusted-bootstrap precondition this Specification's Artifact-specific gates are additive to).
+- Issue #7 — `[WP] Define Simulator contract and M0 validation strategy` (must simulate this contract, including transfer-authorization scenarios).
+- Issue #10 / ADR-0010, Issue #13 / ADR-0011 — trusted bootstrap and site trust-anchor establishment (complete; source of the trusted-bootstrap precondition this Specification's Artifact-specific gates are additive to, and of the pinned Server TLS identity transfer-session authentication reuses).
 
 ## Open questions
 
@@ -190,10 +301,10 @@ Manual: owner approval of this Specification — confirmed (see Status). Remaini
 2. Digest algorithm (`digest_algorithm` value) — implementation/interoperability decision, not chosen here.
 3. Live-Windows backup consistency mechanism — explicitly out of V1 scope; a future architecture decision if ever pursued.
 4. The exact mechanism/component that positively confirms offline/read-only capture conditions (`capture_consistency = Established`) — not designed here.
-5. Transfer-session authentication mechanism — unresolved; constrained by, not solved by, Issues #2/#3.
+5. Exact transfer-authorization token TTL, concrete signature/wire format, and HTTP-level details — implementation-time; the mechanism itself is accepted (see "Transfer-session authentication").
 6. Planned-hardware-change (disk-replacement) authorization mechanism — not designed here, remains for the identity Work Package's model.
 7. Exact schema/field set for Artifact source-provenance records — not decided here.
 
-None of the above are blocking for owner approval of Issue #6 — each is explicitly deferred implementation/future-work detail, not an unresolved architectural fork.
+None of the above are blocking for owner approval of Issue #6 or Issue #15 — each is explicitly deferred implementation/future-work detail, not an unresolved architectural fork.
 
 Status: Approved.
