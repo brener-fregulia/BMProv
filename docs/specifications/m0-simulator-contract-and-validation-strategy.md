@@ -93,7 +93,7 @@ Additional data-plane-specific Simulator scenarios already required by `docs/spe
 
 ## Concurrency target
 
-The Simulator must support a scenario with 20–24 concurrent Simulated Endpoints (`docs/specifications/m0-architecture-baseline.md` "First implementation slice after M0"), consistent with the High-density installation profile (`docs/discovery/architecture-redesign.md` "Capacity and scheduling"). Smaller counts (Small/Medium profiles, 3–10 endpoints) remain useful for faster-iterating scenario development and are not excluded — the 20–24 target is the minimum ceiling the Simulator must reach for M0 acceptance, not the only supported scale.
+The Simulator must support a scenario with 20–24 concurrent Simulated Endpoints (`docs/specifications/m0-architecture-baseline.md` "First implementation slice after M0"), consistent with the High-density installation profile (`docs/discovery/architecture-redesign.md` "Capacity and scheduling"). Smaller counts (Small/Medium profiles, 3–10 endpoints) remain useful for faster-iterating scenario development and are not excluded — 20–24 remains the required Simulator concurrency target, the minimum ceiling the first post-M0 implementation vertical slice's Simulator validation must demonstrably reach, not the only supported scale. Demonstrating this target is empirical evidence produced by that post-M0 validation; it is not a precondition for closing the M0 architecture/contract baseline.
 
 Scenarios requiring this concurrency target specifically: scheduler contention (`m0-job-lifecycle-and-scheduling.md` "Validation expectations" — Simulator); the persistence-load validation below; the data-plane chunked-transfer scenario at scale (`m0-data-plane-and-storage-contracts.md`).
 

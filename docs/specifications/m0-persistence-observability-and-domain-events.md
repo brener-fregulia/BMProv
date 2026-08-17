@@ -54,7 +54,7 @@ This Specification defines the envelope only. No external transport, webhook mec
 
 ## Correlation model
 
-Every durable record and domain event carries whichever of the following identifiers are applicable to it, so that endpoint, job, step, attempt, action, and (in a future Work Package) transfer can be related:
+Every durable record and domain event carries whichever of the following identifiers are applicable to it, so that endpoint, job, step, attempt, action, and transfer can be related:
 
 - `endpoint_id`
 - `job_id`
@@ -65,7 +65,7 @@ Every durable record and domain event carries whichever of the following identif
 
 `attempt_id` and `action_id` are **kept distinct** — `Attempt` is a Server-side Domain concept and `action_id` is an Agent Protocol (wire) concept. For an Agent-executed Attempt the relationship is 1:1, but the identifiers are not merged into one field: both are recorded, and durably linked, so Domain identity is never coupled to the wire protocol's identifier scheme. A future non-Agent-executed Attempt type (not defined by this Specification) could in principle have no `action_id` at all.
 
-This is the minimum correlation set required by `docs/discovery/architecture-redesign.md` "Observability" ("Correlation must make it possible to relate endpoint, job, step, attempt, action, and transfer"). Additional correlation fields may be added by the Work Package that introduces the relevant concept (e.g., Issue #6 for `transfer_id`'s full meaning), without requiring this Specification to be revised for every addition, as long as they compose with this set rather than replace it.
+This is the minimum correlation set required by `docs/discovery/architecture-redesign.md` "Observability" ("Correlation must make it possible to relate endpoint, job, step, attempt, action, and transfer"). `transfer_id` is one such addition, already introduced above and owned by ADR-0008 point 10 / `docs/specifications/m0-data-plane-and-storage-contracts.md`. Additional correlation fields may likewise be added by the Work Package that introduces the relevant concept, without requiring this Specification to be revised for every addition, as long as they compose with this set rather than replace it.
 
 ## Transactional consistency and event model
 
@@ -114,7 +114,7 @@ Required audit records associated with a domain transition participate in the sa
 - concrete performance thresholds for SQLite write contention/latency/backpressure — owned by Issue #7's validation, not defined here;
 - external event transport, webhook mechanism, message broker, or ERP-facing API — not defined by this Specification;
 - operator-identity/authentication model for audit-record attribution — not yet a dedicated M0 Work Package;
-- `transfer_id`'s full meaning and artifact-specific event shapes — Issue #6;
+- artifact-specific event shapes — owned by ADR-0008 point 10 / `docs/specifications/m0-data-plane-and-storage-contracts.md`;
 - telemetry retention/aggregation policy — implementation-time, not an M0 architectural blocker;
 - Job/JobStep/Attempt state-machine semantics themselves — already defined by Issue #4 / ADR-0006; this Specification only defines how that state is persisted and observed.
 
