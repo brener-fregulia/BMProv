@@ -61,7 +61,7 @@ Every durable record and domain event carries whichever of the following identif
 - `jobstep_id`
 - `attempt_id` — the Server-side Domain identity for one JobStep execution attempt (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`).
 - `action_id` — the Agent Protocol identity for the corresponding dispatched action (`docs/specifications/m0-agent-protocol-contract.md`).
-- `transfer_id` — reserved for Issue #6; not defined by this Specification
+- `transfer_id` — used here for correlation only; its full semantics (the durable identity of one logical data-plane transfer operation, distinct from HTTP connection/request identity and from `attempt_id`) are defined by ADR-0008 point 10 / `docs/specifications/m0-data-plane-and-storage-contracts.md`, not redefined by this Specification
 
 `attempt_id` and `action_id` are **kept distinct** — `Attempt` is a Server-side Domain concept and `action_id` is an Agent Protocol (wire) concept. For an Agent-executed Attempt the relationship is 1:1, but the identifiers are not merged into one field: both are recorded, and durably linked, so Domain identity is never coupled to the wire protocol's identifier scheme. A future non-Agent-executed Attempt type (not defined by this Specification) could in principle have no `action_id` at all.
 
@@ -161,6 +161,5 @@ Manual: owner approval of this Specification — confirmed (see Status).
 1. Concrete database schema, indexing, and migration strategy — implementation-time.
 2. Operator-identity/authentication model for audit-record attribution — not yet owned by any M0 Work Package.
 3. Telemetry retention/aggregation policy, if any — implementation-time.
-4. Exact `transfer_id` semantics — Issue #6.
 
 Status: Approved.
