@@ -1,6 +1,6 @@
 # M0 — Architecture Baseline & Simulated Provisioning Contract
 
-Status: **Architecture and contract baseline complete.** All M0 internal architectural decisions are resolved: ADR-0001 through ADR-0011 are `Accepted`, and every M0 Specification required to satisfy the "Acceptance criteria" below is `Approved`. This describes completion of the M0 architecture/contract phase only — it does not claim that implementation exists, that the first vertical slice has been empirically validated, or that physical Integration Environment work is complete; those remain the explicitly separate post-M0 phases described below and in `docs/development/testing.md`. Ready for owner final validation and milestone closure.
+Status: **Architecture and contract baseline complete; owner-approved.** All M0 internal architectural decisions are resolved: ADR-0001 through ADR-0011 are `Accepted`, and every M0 Specification required to satisfy the "Acceptance criteria" below is `Approved`. The owner has explicitly approved this baseline ("Aprovo formalmente o baseline M0 — Architecture Baseline & Simulated Provisioning Contract"), satisfying acceptance criterion 8; acceptance criteria 1–8 are all satisfied. This describes completion of the M0 architecture/contract phase only — it does not claim that implementation exists, that the first vertical slice has been empirically validated, or that physical Integration Environment work is complete; those remain the explicitly separate post-M0 phases described below and in `docs/development/testing.md`.
 
 ## Goal
 
