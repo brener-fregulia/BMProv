@@ -96,20 +96,28 @@ mechanism, distinct from Bamep Web.
 - RF-001: A Simulated Endpoint's trusted-bootstrap stage first establishes the
   Simulator fixture equivalent of `trusted bootstrap established`
   (`m0-trusted-bootstrap-and-server-fingerprint-contract.md` Section 6, "Agent
-  bootstrap sequence"):
-  a nonce-bound signed bootstrap assertion is verified locally, which makes an
-  authenticated expected Server TLS certificate fingerprint available. Only after
-  that authenticated fingerprint is available does the Agent open a real WSS
-  connection to the Server; the Agent verifies the Server's presented TLS
-  certificate fingerprint against the already-authenticated expected fingerprint
-  (pinning), and only on match does Agent Protocol v1 authentication and session
-  establishment proceed. Trusted-bootstrap verification strictly precedes the WSS
-  connection and fingerprint pinning — it is never performed after, or as part of,
-  Agent Protocol v1 authentication. Following successful session establishment, the
-  Agent reports authenticated `BootstrapEvidence` (`boot_nonce`, the assertion,
-  `local_boot_trust: Established`), which the Server independently verifies before
-  recording the trusted-bootstrap fact for that boot context. The resulting
-  Endpoint identity record is created in `PendingEnrollment`.
+  bootstrap sequence"): a nonce-bound signed bootstrap assertion is verified
+  locally, which makes an authenticated expected Server TLS certificate fingerprint
+  available. Only after that authenticated fingerprint is available does the Agent
+  open a real WSS connection to the Server; the Agent verifies the Server's
+  presented TLS certificate fingerprint against the already-authenticated expected
+  fingerprint (pinning), and only on match does Agent Protocol v1 authentication
+  (credential redemption/validation via `AuthRequest`) proceed. Trusted-bootstrap
+  verification strictly precedes the WSS connection and fingerprint pinning — it is
+  never performed after, or as part of, Agent Protocol v1 authentication. On
+  successful credential validation, the Server responds `SessionEstablished` and,
+  per `m0-endpoint-identity-lifecycle.md` ("first successful credential exchange"),
+  the Endpoint identity record is created in `PendingEnrollment` at this point —
+  independent of, and strictly before, any `BootstrapEvidence` exchange. Only after
+  `SessionEstablished` does the Agent report authenticated `BootstrapEvidence`
+  (`boot_nonce`, the assertion, `local_boot_trust: Established`), which the Server
+  independently verifies before recording the trusted-bootstrap fact for that boot
+  context. A `PendingEnrollment` session resulting from a valid credential exchange
+  remains intact and unaffected even when `BootstrapEvidence` is absent, malformed,
+  or rejected — only the trusted-bootstrap fact for that boot context becomes/
+  remains `NotEstablished` (`m0-agent-protocol-contract.md` "Trusted bootstrap
+  evidence"; `m0-trusted-bootstrap-and-server-fingerprint-contract.md` "Failure
+  semantics").
 - RF-002: An explicit, distinct operator-approval action transitions the Endpoint
   from `PendingEnrollment` to `Enrolled` (`m0-endpoint-identity-lifecycle.md`,
   ADR-0004 default path). This action is originated by a control path separate
