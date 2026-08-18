@@ -220,7 +220,8 @@ Directly exercised by M1: `m0-architecture-baseline.md`,
 `m0-trusted-bootstrap-and-server-fingerprint-contract.md`; ADR-0004 through
 ADR-0008; ADR-0010 (fixture-level trusted-bootstrap substitution only, per its own
 allowance for a deterministic non-production fixture — not real Secure
-Boot/firmware mechanics).
+Boot/firmware mechanics); ADR-0012 (runtime Agent credential issuance, rotation,
+and reconnect recovery — directly exercised by WP1).
 
 Architectural constraints preserved (followed, not empirically retested by M1):
 ADR-0001 (modular monolith, Worker process isolation), ADR-0002 (Server: Rust),

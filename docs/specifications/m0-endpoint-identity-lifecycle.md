@@ -42,9 +42,38 @@ Transitions:
 - **NoActiveCredential** — no runtime credential currently issued (e.g., no runtime credential has yet been issued; a prior credential was explicitly removed and no replacement is active; or enrollment has not yet reached the point where a runtime credential exists). Being offline/disconnected is **not** an example of `NoActiveCredential` — current Agent presence (connectivity) and credential validity are independent facts (`docs/specifications/m0-administrative-api-web-read-contract.md` already establishes this for the `agent_presence` read representation): an Endpoint may hold a valid, unexpired `CredentialActive` credential while currently disconnected.
 - **CredentialActive** — a runtime Agent identity/session credential is currently valid.
 - **CredentialExpired** — the runtime credential's validity period has elapsed.
-- **CredentialRevoked** — the runtime credential was explicitly invalidated (operator action, or Server-driven revocation, e.g. as a consequence of a `Conflict` hardware-confidence state).
+- **CredentialRevoked** — the runtime credential was explicitly invalidated (operator action, or Server-driven revocation, e.g. as a consequence of a `Conflict` hardware-confidence state). Revocation invalidates every credential currently valid in the Endpoint's credential chain, not only the most recently issued one (see "Credential chain, rotation, and revocation" below).
 
 This dimension cycles repeatedly and independently across an Endpoint's lifetime (every reconnect, every renewal) and does not by itself change the Endpoint identity lifecycle state. The concrete authentication mechanism that establishes `CredentialActive` is owned by the Agent control-protocol Work Package (Issue #3); this Specification only defines the resulting state, not the mechanism.
+
+### Credential chain, rotation, and revocation (ADR-0012)
+
+Every successful `AuthRequest` — whether presenting the boot-scoped enrollment credential (first contact of a boot) or a previously issued runtime credential (any later reconnect) — issues a fresh runtime credential through the identical mechanism (ADR-0004, "Reconnect handling"; ADR-0012):
+
+```text
+same boot:      E1 → R1 → R2 → R3 → ...
+genuine reboot:  E2 (new enrollment credential) → fresh runtime credential → ...
+```
+
+A runtime credential does not need to survive a genuine Agent reboot — a new boot always obtains a new enrollment credential from the Boot Orchestrator and restarts this chain from `E`; Endpoint identity continuity across reboot is carried by the identity-lifecycle dimension above (`Enrolled`, matched by inventory signals), never by credential persistence across boots.
+
+**Bounded valid set.** For one credential chain, the durable valid set never exceeds: one predecessor within its grace/expiry bound, plus at most one current unconfirmed successor. No unbounded accumulation of valid credentials is permitted.
+
+**Replacement of an unconfirmed successor.** If a predecessor is presented again in a fresh `AuthRequest` while its previously issued successor has never itself successfully authenticated, and the predecessor is still within its grace/expiry bound, the Server does not reconstruct or redeliver that successor. It atomically supersedes it and mints a fresh one instead. The Server is never required to reconstruct a previously issued secret (see "Durable representation" below).
+
+**Confirmation.** Receiving the issued credential (`m0-agent-protocol-contract.md` `SessionEstablished`) does not by itself confirm delivery. A successor is confirmed only when it is later presented in an `AuthRequest` and successfully authenticates; at that point its predecessor is retired, the confirmed successor becomes the predecessor for the next rotation, and a fresh successor is issued.
+
+**Concurrent redemption.** Multiple connections may authenticate concurrently while presenting the same still-valid predecessor. Successor issuance is conceptually serialized by the durable transaction each successful redemption commits in — the last committed successor is the only current one. An already-established session is not retroactively invalidated merely because the credential issued to it for a future reconnect was later superseded by a concurrent redemption. Locking/isolation mechanics are implementation-time.
+
+**Revocation.** Explicit `CredentialRevoked` invalidates every credential still valid in the Endpoint's chain at that instant — the current predecessor in grace and any unconfirmed successor alike, never only the most recently issued value.
+
+**Routine rotation is not a new lifecycle transition.** Issuing a successor while the dimension remains `CredentialActive` is durable bookkeeping required to validate a future `AuthRequest`; it does not change the credential dimension's value and does not, by itself, introduce a new domain event (`m0-persistence-observability-and-domain-events.md` remains transition-oriented, not rotation-oriented).
+
+**Durable representation.** This model never requires the Server to store or reconstruct a previously issued plaintext runtime credential. The concrete representation (e.g., a salted hash verified against a presented value, or a self-verifying signed capability) remains implementation-time, provided it satisfies the properties above.
+
+**Persist-before-send.** Durable credential/identity changes commit in one SQLite transaction (consistent with the atomic state+event+audit model, ADR-0007) before the Server attempts delivery over WSS — a database transaction and a WebSocket send cannot be atomic with each other (the same constraint already governing `ActionDispatch`, `m0-persistence-observability-and-domain-events.md` "Transactional consistency and event model"). A crash or dropped connection between commit and delivery is an expected case, recovered by the replacement rule above rather than by any special-cased reconciliation.
+
+Full reasoning and rejected alternatives: ADR-0012.
 
 ### 3. Hardware/identity-confidence state (continuously evaluated, not a lifecycle)
 
@@ -114,6 +143,7 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (`Accepted`; operator-approval-gated first enrollment is the M0 default).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of precondition 7 (`trusted bootstrap established`).
 - ADR-0011 — V1 site trust-anchor establishment and operator-verified first-key pairing (`Accepted`) — resolves only sub-problem (B), how an Endpoint legitimately learns the site's trust-anchor public key. The concrete representation/state machine for the trusted-bootstrap fact itself (precondition 7) is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13, `Approved`), not by this ADR.
+- ADR-0012 — Runtime Agent credential issuance, rotation, and reconnect recovery (`Proposed`) — the credential-chain/grace/replacement/confirmation/revocation model this Specification's "Credential chain, rotation, and revocation" subsection defines.
 
 ## Related work
 
@@ -129,7 +159,7 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 The concrete representation/state machine for the trusted-bootstrap fact (precondition 7) is no longer tracked as open here: it is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13, `Approved`), which in turn consumes ADR-0011 for the V1 site trust-anchor establishment decision specifically.
 
 1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, whether escalation between them can ever be automatic, and the exact mechanics of "explicit revalidation" — implementation-time policy, not an M0 architectural blocker.
-2. Exact credential TTL/renewal policy — implementation-time detail, intentionally left unresolved here.
+2. Exact numeric grace/expiry duration for the credential chain (ADR-0012) — implementation-time detail; the chain/rotation/replacement mechanism itself is no longer open (see "Credential chain, rotation, and revocation").
 3. Design of the future pre-authorized enrollment mechanism (token format, scope, expiry, issuance UX) — explicitly not required for M0.
 
 Status: Approved.
