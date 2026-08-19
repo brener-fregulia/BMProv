@@ -384,7 +384,7 @@ async fn revoked_chain_rejects_every_credential_in_it() {
     );
     // Even the original, still within its own validity window, enrollment
     // credential must not resurrect a revoked chain (see also
-    // `genuine_reboot_is_not_attempted_against_a_revoked_chain` below,
+    // `genuine_reboot_does_not_clear_explicit_credential_revocation` below,
     // which exercises this with a *fresh* E2 rather than a retried E1).
     assert_eq!(
         enrollment.redeem("sim-endpoint-07", e1).await.unwrap(),
@@ -781,14 +781,14 @@ async fn genuine_reboot_does_not_bypass_authentication_with_invalid_credential()
     db.teardown().await;
 }
 
-/// Finding 2's explicitly reported open question, exercised rather than
-/// silently decided: whether an explicit `CredentialRevoked` should survive
-/// a genuine reboot is not resolved by any current ADR/Specification. This
-/// test documents the deliberately preserved pre-existing behavior — a
-/// revoked chain stays rejected even against a brand-new, independently
-/// valid enrollment credential — until the owner decides otherwise.
+/// Owner-approved policy (ADR-0012 point 8 / "Consequences"): `CredentialRevoked`
+/// is durable Endpoint-level state that survives a genuine reboot. A fresh,
+/// independently valid enrollment credential does not clear it and does not
+/// automatically establish a new runtime credential chain — restoring
+/// `CredentialActive` requires a separate, explicit, authorized reactivation
+/// operation, not implemented in WP1.
 #[tokio::test]
-async fn genuine_reboot_is_not_attempted_against_a_revoked_chain() {
+async fn genuine_reboot_does_not_clear_explicit_credential_revocation() {
     let db = TestDatabase::setup().await;
     let (boot, enrollment, clock) = build_services(db.pool.clone());
 
@@ -818,8 +818,8 @@ async fn genuine_reboot_is_not_attempted_against_a_revoked_chain() {
     assert_eq!(
         result,
         RedeemResult::Rejected,
-        "a revoked chain must not be silently re-established by a genuine reboot \
-         until this policy question is explicitly resolved"
+        "a revoked chain must not be re-established by a genuine reboot: \
+         CredentialRevoked is durable and survives a fresh E2 (ADR-0012 point 8)"
     );
 
     db.teardown().await;

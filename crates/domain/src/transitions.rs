@@ -150,13 +150,14 @@ pub fn redeem_known(
 ///
 /// The caller must have already independently verified `presented` as a
 /// legitimate, unexpired enrollment credential (`credential::enrollment::verify`),
-/// exactly as `first_contact` requires. The caller must also decide,
-/// *before* calling this function, whether a currently `CredentialRevoked`
-/// chain may be re-established this way at all — this function does not
-/// decide that policy question and must not be called for a revoked chain
-/// until it is resolved (see Issue #17 session notes: whether an explicit
-/// revocation survives a genuine reboot is an open question no current
-/// ADR/Specification answers).
+/// exactly as `first_contact` requires. The caller must also have already
+/// confirmed the current chain is not `CredentialRevoked` — this function
+/// does not check that itself and must not be called for a revoked chain:
+/// `CredentialRevoked` is durable Endpoint-level state that survives a
+/// genuine reboot, and a fresh `E2` does not clear it (owner-approved
+/// policy, ADR-0012 point 8 / "Consequences"; restoring `CredentialActive`
+/// requires a separate, explicit, authorized reactivation operation, not
+/// designed here).
 pub fn genuine_reboot(
     aggregate: &EndpointAggregate,
     presented: CredentialSecret,

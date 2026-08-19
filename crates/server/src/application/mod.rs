@@ -189,13 +189,14 @@ impl<R: EndpointRepository> EnrollmentService<R> {
                             // re-run (ADR-0004 "Reconnect handling").
                             //
                             // Deliberately NOT attempted when the current
-                            // chain is `CredentialRevoked`: whether an
-                            // explicit revocation should survive a genuine
-                            // reboot is an open policy question no current
-                            // ADR/Specification decides (Issue #17 session
-                            // report) — this preserves the pre-existing
-                            // Rejected outcome for that combination rather
-                            // than silently choosing a policy.
+                            // chain is `CredentialRevoked`: revocation is
+                            // durable Endpoint-level state that survives a
+                            // genuine reboot, and a fresh, independently
+                            // valid E2 does not clear it (owner-approved
+                            // policy, ADR-0012 point 8 / "Consequences").
+                            // Restoring `CredentialActive` requires a
+                            // separate, explicit, authorized reactivation
+                            // operation, not implemented in WP1.
                             if aggregate.credential.is_revoked() {
                                 transitions::RedeemOutcome::Rejected
                             } else if enrollment::verify(&key, &presented, now) {

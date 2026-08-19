@@ -94,7 +94,19 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
    concurrent redemption. The exact locking/isolation mechanism is implementation-time.
 8. **Revocation.** Explicit `CredentialRevoked` invalidates every credential still valid in the
    Endpoint's chain at that instant — the current predecessor in grace and any unconfirmed
-   successor alike — never only the most recently issued value.
+   successor alike — never only the most recently issued value. This invalidation is durable
+   across disconnects, reconnects, and genuine Agent reboots: it is a fact about the Endpoint's
+   credential dimension, not scoped to a single boot/runtime-credential chain instance. A fresh,
+   independently valid boot-scoped enrollment credential (point 1's `E2`) does not itself clear
+   `CredentialRevoked`, and presenting it does not establish a new runtime credential chain while
+   the dimension remains `CredentialRevoked` — the genuine-reboot fallback in point 1 applies only
+   when the credential dimension is not `CredentialRevoked`. Restoring `CredentialActive` requires
+   a separate, explicit, authorized credential-reactivation/recovery operation; that operation's
+   concrete mechanism (invoking actor, preconditions, event/audit shape) is deferred and is not
+   decided by this ADR or required by WP1. This does not weaken point 1's identity-continuity
+   guarantee: durable Endpoint identity (`Enrolled`) is unaffected by `CredentialRevoked` and is
+   never itself reverted by revocation — identity continuity may remain fully established while
+   credential re-establishment is independently blocked.
 9. **Rotation is not a new lifecycle transition.** Routine rotation while the credential
    dimension remains `CredentialActive` (points 3, 5, 7) is durable bookkeeping required to
    validate a future `AuthRequest`; it does not change the credential dimension's value and does
@@ -180,6 +192,14 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
   remains implementation-time, bounded by point 10.
 - The exact numeric grace/expiry duration remains implementation-time, unchanged from ADR-0004
   point 6's existing delegation.
+- **Owner decision (post-acceptance amendment):** whether an explicit `CredentialRevoked` state
+  survives a genuine reboot — previously left open (recorded in Issue #17 session notes and in
+  `redeem_known`/`genuine_reboot`'s own doc comments) — is resolved by point 8 above:
+  `CredentialRevoked` is durable Endpoint-level state, not scoped to a single boot/runtime-credential
+  chain instance, and a fresh `E2` cannot itself re-establish a chain while it holds. The concrete
+  credential-reactivation/recovery operation that restores `CredentialActive` remains out of scope
+  for this ADR and for WP1; no functional behavior changes as a result of this amendment, since the
+  implementation already failed closed for this case.
 
 ## Related architecture
 
