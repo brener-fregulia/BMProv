@@ -21,7 +21,7 @@ Bamep V1:
 - initially operates as a single-server deployment;
 - assumes a dedicated provisioning interface/VLAN/network where Bamep may control DHCP/PXE;
 - does not depend on Internet access once required artifacts are available locally;
-- does not require MikroTik hardware, a dedicated hot cache, dedicated archive storage, RAID, PostgreSQL, or WebSocket.
+- does not require MikroTik hardware, a dedicated hot cache, dedicated archive storage, RAID, or WebSocket.
 
 Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general switch manager, or V1 multi-site platform. A future ERP must integrate through a public/versioned API and domain events, never through Bamep's internal database.
 
@@ -39,7 +39,7 @@ Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general sw
 - **Adapters**: persistence, PXE/GRUB, switch integration, filesystem/storage, and protocol transports.
 - **Workers**: transfer, compression, verification, and artifact movement (isolation boundary accepted in ADR-0001; language open in ADR-0003).
 
-The Domain must not depend on GRUB, MikroTik, `/dev/sda`, `snmpwalk`, WebSocket, SQLite, or zstd — those are Adapter responsibilities.
+The Domain must not depend on GRUB, MikroTik, `/dev/sda`, `snmpwalk`, WebSocket, PostgreSQL/SQLx, or zstd — those are Adapter responsibilities.
 
 These boundaries apply within the modular-monolith runtime topology accepted in ADR-0001: one deployable Server artifact with the internal boundaries above, plus a separate Worker process/isolation boundary for heavy workloads.
 
@@ -94,6 +94,7 @@ Already-accepted direction, persisted here:
 - ADR-0002 — Backend/Server implementation language: Rust (`Accepted`).
 - ADR-0003 — Worker and Agent implementation language strategy: Rust for both, with contracts kept explicit and independently versioned (`Accepted`).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of the "Trusted bootstrap baseline" consequence recorded above; does not select a network-boot mechanism.
+- ADR-0013 — PostgreSQL persistence backend baseline (`Accepted`) — current persistence-backend decision; source of the "does not require ... PostgreSQL" removal above and the PostgreSQL/SQLx Domain-isolation wording in "Component responsibilities and boundaries".
 
 ## Related work
 
