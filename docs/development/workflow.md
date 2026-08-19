@@ -16,6 +16,8 @@ The workflow should preserve owner control, traceability, safety, and continuity
 
 * Keep `main` stable.
 * Execute one approved Work Package, Technical Spike, or reduced-SDD responsibility at a time.
+* Normal work may be performed directly on `main`; use a branch only when it provides actual value.
+* A Work Package may be executed through multiple checkpoints across multiple sessions.
 * Do not silently expand approved scope.
 * Work should be resumable from repository and GitHub context, not conversation history.
 * Relevant automated validation is part of execution completeness.
@@ -32,8 +34,6 @@ Approved work
       ↓
 Ready
       ↓
-Branch from main
-      ↓
 In Progress
       ↓
 Validation
@@ -41,7 +41,11 @@ Validation
 Done
 ```
 
+During `In Progress`, execution may consist of multiple small checkpoints (see `docs/development/sdd.md`).
+
 Execution may include implementation, documentation, architecture work, Technical Spikes, simulator work, or integration preparation.
+
+For the current owner-driven, sequential Bamep development model, this flow normally runs directly on `main`. See "Branch model" below for when a branch is used instead.
 
 A failed validation returns the affected work to `In Progress`.
 
@@ -77,9 +81,19 @@ A Technical Spike may be `Ready` while the Feature or decision depending on its 
 
 ## Branch model
 
-Planned work normally uses a branch created from `main`.
+For the current owner-driven, sequential Bamep development model, normal work may be performed directly on `main`. Do not create a branch merely because a Work Package exists.
 
-Use:
+Working directly on `main` does not weaken the requirement to keep it stable: preserve small coherent changes, run relevant automated validation, keep Git and publication owner-controlled as defined in `AGENTS.md`, and never leave main in a known-broken state intentionally.
+
+Use a branch when it provides actual value, such as:
+
+* parallel or concurrent work;
+* risky or large isolated changes;
+* Technical Spikes intended to remain isolated or discardable;
+* external contributions or pull requests;
+* work explicitly requested by the owner to be isolated.
+
+When a branch is used, follow the existing naming conventions:
 
 ```text
 feature/<name>
@@ -99,7 +113,7 @@ spike/winpe-boot
 docs/sdd-workflow
 ```
 
-Work Packages normally share the branch of their parent Feature, Fix, Refactor, or documentation effort.
+Work Packages normally share the branch of their parent Feature, Fix, Refactor, or documentation effort when a branch is used.
 
 Do not create a branch per Work Package unless isolation or risk justifies it.
 
@@ -112,6 +126,8 @@ Branch creation, switching, commits, merges, pushes, pulls, tags, and publicatio
 ## In Progress
 
 `In Progress` is active execution.
+
+Execution may consist of multiple small checkpoints. A checkpoint is a bounded implementation or review step inside the approved Work Package, sized for one focused agent session or review cycle. Checkpoints exist to prevent context exhaustion and overly broad implementation prompts; they are not a new Feature, Work Package, Issue, or GitHub Project status by default, and they are not a new approval boundary when they merely decompose already-approved scope. A checkpoint may result in one coherent commit when useful. See `docs/development/sdd.md` for the full definition.
 
 During execution:
 

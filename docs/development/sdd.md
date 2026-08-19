@@ -223,11 +223,17 @@ A Spike is not production implementation by default.
 
 ### Work Package
 
-A Work Package is the smallest planned execution unit.
+A Work Package is the smallest approved and tracked unit of delivery and acceptance that is worth materializing as project work.
+
+A Work Package:
+
+* has coherent scope and acceptance criteria;
+* may span multiple development or AI sessions;
+* may require multiple implementation checkpoints (see "Checkpoint" below);
+* remains the GitHub workflow and status unit;
+* does not need to map one-to-one to a commit, branch, or agent session.
 
 It must contain enough persistent context for another development session to execute and validate it without relying on the conversation that created it.
-
-Work Packages do not need to map one-to-one to commits.
 
 ## Work hierarchy
 
@@ -284,6 +290,23 @@ Outcome
 A Work Package must not silently absorb responsibilities from another package or from unapproved future work.
 
 If execution reveals that its scope is incomplete or architecturally incorrect, stop and return to the appropriate SDD stage instead of expanding implementation implicitly.
+
+## Checkpoint
+
+A checkpoint is a bounded implementation or review step inside an already-approved Work Package.
+
+A checkpoint:
+
+* is intentionally small enough for one focused agent session or review cycle;
+* exists to prevent context exhaustion and overly broad implementation prompts;
+* is not a new Feature, Work Package, or Issue by default;
+* is not independently represented in GitHub Project status;
+* is not a new approval boundary when it merely decomposes already-approved scope;
+* may result in one coherent commit when useful.
+
+Checkpoints are execution granularity, not an additional project hierarchy level. Do not create ceremony around them.
+
+If a checkpoint discovers new scope, a new architectural decision, or a safety question, the Discovery, Specification, and ADR rules defined elsewhere in this document still apply.
 
 ## Owner approval
 
