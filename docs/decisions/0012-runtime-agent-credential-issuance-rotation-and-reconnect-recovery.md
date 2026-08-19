@@ -108,11 +108,18 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
     implementation-time, provided it satisfies points 1–9.
 11. **Wire mechanism.** `SessionEstablished` is extended —
     `SessionEstablished{protocol_version, session_id, runtime_credential, credential_expires_at}`
-    — rather than introducing a separate message type. Issuance of the runtime credential is 1:1
-    with, and decided in the same instant as, successful credential validation and session
-    establishment (ADR-0004 point 6); a dedicated message would introduce a new partial-delivery
-    failure state ("session established but credential never arrived") that bundling into one
-    message structurally cannot produce. `runtime_credential` is opaque from Agent Protocol's own
+    — rather than introducing a separate message type: there is no second Agent Protocol message
+    or phase that delivers the runtime credential. Issuance of the runtime credential is 1:1 with,
+    and decided in the same instant as, successful credential validation and session establishment
+    (ADR-0004 point 6); a dedicated second message would introduce an additional protocol-level
+    credential-delivery phase, and with it a new partial-delivery failure state ("session
+    established but credential never arrived via that separate message") that bundling into one
+    message avoids by construction. This is a wire-shape choice only: it does not, and cannot,
+    eliminate the possibility that `SessionEstablished` itself — credential included — is lost in
+    its entirety after the durable commit (point 2, "Persist-before-send ordering"); that failure
+    window exists regardless of wire shape and is exactly what the predecessor/replacement recovery
+    mechanism (points 3, 6) is designed to handle. `runtime_credential` is opaque from Agent
+    Protocol's own
     perspective, matching how `bootstrap_assertion` and the `TransferAuthorizationGrant` `token`
     are already treated; `credential_expires_at` follows the timestamp convention
     `m0-agent-protocol-contract.md` "Wire encoding" already defines (RFC 3339 / ISO 8601 UTC).
@@ -140,8 +147,12 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
 - **Dedicated `RuntimeCredentialIssued` message**: rejected — `BootstrapEvidence`/
   `TransferAuthorizationGrant` carry facts that are N:1 or asynchronous relative to
   `SessionEstablished`. Runtime credential issuance is 1:1 and decided in the same instant as
-  session establishment; splitting it into a second message introduces a new ambiguous
-  partial-delivery failure state that bundling cannot produce, with no corresponding benefit. Not
+  session establishment; splitting it into a second message would introduce an additional
+  protocol-level delivery phase, and with it a new ambiguous partial-delivery failure state that
+  bundling into one message avoids by construction, with no corresponding benefit. This is not a
+  claim that bundling makes `SessionEstablished` itself immune to being lost after the durable
+  commit — that failure window exists regardless of wire shape and remains covered by the
+  predecessor/replacement recovery mechanism (points 3, 6), not by this wire-shape choice. Not
   preferred merely for syntactic consistency with the additive-message precedent.
 - **Collapsing the runtime credential into the Server-side `CredentialActive` state** (the
   rejected Issue #17 "Reading A"): the Agent would reuse its original fixture/enrollment-issued
