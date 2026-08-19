@@ -1,6 +1,8 @@
 # ADR-0007: Persistence backend and durable/transient boundary
 
-Status: Superseded by ADR-0013
+Status: Superseded
+
+Superseded by: ADR-0013
 
 **Superseded note (added, body otherwise unchanged as historical record):** the
 backend selection in "Decision" §1 ("SQLite is accepted as the M0 persistence

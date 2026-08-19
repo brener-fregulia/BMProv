@@ -60,8 +60,9 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
    `m0-persistence-observability-and-domain-events.md`. Only after that commit does the Server
    attempt to deliver `SessionEstablished` (carrying the new credential) over WSS. A database
    transaction and a WebSocket send cannot be atomic with each other — the same constraint
-   ADR-0007's "Crash-safe dispatch persistence ordering" already establishes for `ActionDispatch`,
-   applied here to credential issuance. A crash or dropped connection between commit and delivery
+   ADR-0013 carries forward (point 16), originally established in ADR-0007's "Crash-safe dispatch
+   persistence ordering" for `ActionDispatch`, applied here to credential issuance. A crash or
+   dropped connection between commit and delivery
    is therefore an expected, not exceptional, case, recovered by point 3.
 3. **Replacement, not redelivery, of an unconfirmed successor.** If a predecessor `P` is
    presented again in a fresh `AuthRequest` while its previously issued successor `S` has never

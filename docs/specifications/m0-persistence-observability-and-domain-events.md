@@ -69,21 +69,21 @@ This is the minimum correlation set required by `docs/discovery/architecture-red
 
 ## Transactional consistency and event model
 
-Per ADR-0007: when a durable domain transition requires a domain event and/or an audit record, the domain-state change, its event, and any required audit record are persisted atomically in the same persistence transaction. A crash must never leave committed state without its required event/audit record, or a committed event/audit record for a transition that did not itself commit.
+Per ADR-0013 (originally established by ADR-0007): when a durable domain transition requires a domain event and/or an audit record, the domain-state change, its event, and any required audit record are persisted atomically in the same persistence transaction. A crash must never leave committed state without its required event/audit record, or a committed event/audit record for a transition that did not itself commit.
 
-For an Agent-executed Attempt specifically, this transaction commits **before** the Server attempts to transmit `ActionDispatch` to the Agent — a database transaction and a WebSocket send cannot be atomic with each other, so persistence always comes first. ADR-0007 "Crash-safe dispatch persistence ordering" defines the exact ordering and how a crash around the send boundary is handled (via the existing `Dispatched` → `AwaitingReconciliation` path, `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`); this Specification does not duplicate that detail.
+For an Agent-executed Attempt specifically, this transaction commits **before** the Server attempts to transmit `ActionDispatch` to the Agent — a database transaction and a WebSocket send cannot be atomic with each other, so persistence always comes first, an invariant ADR-0013 carries forward directly (point 16). The exact ordering, and how a crash around the send boundary is handled (via the existing `Dispatched` → `AwaitingReconciliation` path, `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`), is defined in ADR-0007 "Crash-safe dispatch persistence ordering" (historical origin, preserved unedited; the requirement itself is authoritative through ADR-0013); this Specification does not duplicate that detail.
 
 **This is not event sourcing.** Current durable domain state remains the source of truth. The domain event describing a transition is persisted in the **same atomic transaction** as that transition — it becomes durable and visible only if that transaction commits; it is not a second, post-commit database write, and there is no window where the transition is committed but its event is not (or vice versa). Domain events are not a log Bamep replays to reconstruct state. External publication/delivery semantics for future integrations are outside this Work Package.
 
 ## Inventory persistence boundary
 
-- A durable inventory revision is written only when observed inventory differs from the Endpoint's last durable revision — not on every report/poll cycle. This is the concrete, testable expression of ADR-0007's durable-write-model requirement for inventory specifically.
+- A durable inventory revision is written only when observed inventory differs from the Endpoint's last durable revision — not on every report/poll cycle. This is the concrete, testable expression of ADR-0013's durable-write-model requirement for inventory specifically (originally established by ADR-0007).
 - The current inventory revision identifier is what `docs/decisions/0004-endpoint-identity-and-enrollment-bootstrap.md` / `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md` reference as the destructive-operation precondition "sufficiently fresh inventory" — this Specification is the durable source of that identifier.
 - Historical inventory revisions are retained as an append/revision chain sufficient for audit and precondition checks; a specific retention duration or pruning policy is implementation-time detail, not decided here.
 
 ## Auditability
 
-Durable audit records exist for two categories of safety-relevant activity, aligning this Specification with ADR-0007's full auditability requirement (which covers both operator decisions and destructive-operation dispatch/outcome, not operator decisions alone):
+Durable audit records exist for two categories of safety-relevant activity, aligning this Specification with ADR-0013's full auditability requirement (originally established by ADR-0007; covers both operator decisions and destructive-operation dispatch/outcome, not operator decisions alone):
 
 **Operator decisions**, already required by earlier M0 ADRs:
 
@@ -92,10 +92,10 @@ Durable audit records exist for two categories of safety-relevant activity, alig
 - reconciliation decisions closing an Attempt as `Indeterminate`, and any decision authorizing a further Attempt for a destructive JobStep (`docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`);
 - Job cancellation decisions.
 
-**Destructive execution**, required by ADR-0007 and not previously made explicit in this Specification:
+**Destructive execution**, required by ADR-0013 (originally ADR-0007) and not previously made explicit in this Specification:
 
 - the authorization/decision enabling a destructive dispatch, where applicable (e.g., the operator decision authorizing a retry after `Indeterminate` — the same record as above, linked to the dispatch it authorizes);
-- the destructive dispatch **commitment** — the durable record that the Server authorized and durably committed that Attempt for transmission (`docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md` "Crash-safe dispatch persistence ordering"). This record represents the Server's own committed decision, not confirmation that the `ActionDispatch` frame was actually transmitted or received — a crash can occur after this commit and before transmission is attempted. Actual Agent-side knowledge of the action remains represented by the existing Agent Protocol lifecycle (`ActionAck`, `ActionResult`, `StatusQuery`/`StatusReport`) and the Attempt's reconciliation transitions, not by a second audit record;
+- the destructive dispatch **commitment** — the durable record that the Server authorized and durably committed that Attempt for transmission (originally `docs/decisions/0007-persistence-backend-and-durable-transient-boundary.md` "Crash-safe dispatch persistence ordering", carried forward by ADR-0013). This record represents the Server's own committed decision, not confirmation that the `ActionDispatch` frame was actually transmitted or received — a crash can occur after this commit and before transmission is attempted. Actual Agent-side knowledge of the action remains represented by the existing Agent Protocol lifecycle (`ActionAck`, `ActionResult`, `StatusQuery`/`StatusReport`) and the Attempt's reconciliation transitions, not by a second audit record;
 - its known terminal outcome (`Succeeded`/`Failed`/`Cancelled`/`Rejected`) or its `Indeterminate` resolution, once established through that Agent Protocol lifecycle.
 
 An audit record is durable, immutable once written, and carries the correlation fields above. Actor attribution distinguishes an **operator actor** (a human decision, when operator identity is available) from a **system actor** (e.g., an automatic non-destructive retry per JobStep retry policy) where the distinction is known. This Specification does not define the operator-identity/authentication model itself (an Administrative API concern, not yet a dedicated M0 Work Package) — it only establishes that these records must be durably and immutably kept, with whichever actor information is available at the point of recording.

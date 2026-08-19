@@ -12,11 +12,16 @@ Execution grouping: native GitHub Milestone #2
 ## Context
 
 M0 (`docs/specifications/m0-architecture-baseline.md`) closed the architecture and
-contract phase only: all 11 ADRs are `Accepted`, all 11 M0 Specifications are
-`Approved`, and the owner has explicitly approved that baseline
-(`m0-architecture-baseline.md`, Status line). No product implementation exists yet —
-the repository contains no Cargo workspace and no source code
-(`docs/architecture/README.md` — "no implemented application architecture yet").
+contract phase only: at M0 closure, all 11 ADRs were `Accepted`, all 11 M0
+Specifications were `Approved`, and the owner had explicitly approved that
+baseline (`m0-architecture-baseline.md`, Status line). At the time this M1
+Specification was approved, no product implementation existed yet — the
+repository contained no Cargo workspace and no source code
+(`docs/architecture/README.md` — "no implemented application architecture yet" at
+that time). These are point-in-time facts about the M0/M1-approval moment, not a
+claim about current repository state — see the individual ADRs/Specifications and
+GitHub for current status (for example, ADR-0007 was later superseded by
+ADR-0013 during M1 execution; see "Traceability" below).
 M0's own "First implementation slice after M0" section
 (`m0-architecture-baseline.md` "First implementation slice after M0") already
 defines the required scope of the milestone that follows it; this Specification

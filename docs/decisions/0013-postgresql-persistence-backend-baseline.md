@@ -128,7 +128,7 @@ a `Superseded` ADR-0007 to reconstruct them:
    transition, not per byte or per chunk.
 6. **Domain events are curated, coarse-grained durable facts** describing
    completed state transitions — not a firehose of raw activity, and not an
-   event-sourcing log (see point 12).
+   event-sourcing log (see point 15).
 7. **Safety-relevant audit records are durable and immutable once written**
    (operator decisions; destructive-dispatch commitment and outcome).
 8. **Agent presence/connectivity is transient**, independent of credential
@@ -171,8 +171,8 @@ requirements:
 - genuine concurrent writers under MVCC, rather than SQLite's single-writer
   serialization — a better structural fit for the durable write pattern ADR-0007
   itself defines (state transitions across many concurrent Endpoints/Jobs/
-  Attempts), and the exact property the M1 persistence-load validation (point 4 of
-  ADR-0007's carried-forward list; Issue #21) exists to measure;
+  Attempts), and exactly the kind of behavior the M1 persistence-load validation
+  (Issue #21) exists to measure;
 - native integration with Bamep's async/Tokio control plane, avoiding a
   synchronous-driver blocking-thread bridge;
 - a more natural evolution path as Job/JobStep/Attempt, Artifact/Snapshot, and
