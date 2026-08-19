@@ -36,6 +36,32 @@ impl From<EndpointUpdateError> for ApplicationError {
     }
 }
 
+/// Wall-clock abstraction so [`EnrollmentService::redeem`] can obtain "now"
+/// at *decision time* — inside `EndpointRepository::redeem`'s lock/
+/// transaction scope, after it has serialized against concurrent
+/// redemptions for the same inventory signal — rather than at *call time*,
+/// before any lock is even requested. ADR-0012 requires that "the
+/// credential presented needs to remain valid at the commit that accepts
+/// the redemption"; a `now` captured before a lock wait and carried through
+/// unchanged cannot satisfy that if the wait is long enough for the
+/// credential to expire in between. Deliberately adapter-neutral and
+/// PostgreSQL-free — this is a pure Application-level concern, not a Port/
+/// Adapter one, and Domain functions are unaffected: they still take an
+/// explicit `now: DateTime<Utc>` parameter, preserving Domain purity and
+/// deterministic unit testing.
+pub trait Clock: Send + Sync {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// Real wall-clock time — the production default.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
 /// Outcome of redeeming a presented credential in a fresh `AuthRequest`,
 /// shaped for the eventual Agent Control Gateway adapter to translate
 /// directly into `SessionEstablished` / `AuthError`
@@ -81,14 +107,24 @@ pub struct EnrollmentService<R: EndpointRepository> {
     repo: Arc<R>,
     enrollment_key: SigningKey,
     credential_ttl: Duration,
+    clock: Arc<dyn Clock>,
 }
 
 impl<R: EndpointRepository> EnrollmentService<R> {
+    /// Uses [`SystemClock`] — real wall-clock time, evaluated at decision
+    /// time by [`redeem`](Self::redeem). Use [`with_clock`](Self::with_clock)
+    /// to inject a deterministic clock (e.g. for tests that must control
+    /// simulated time precisely).
     pub fn new(repo: Arc<R>, enrollment_key: SigningKey) -> Self {
+        Self::with_clock(repo, enrollment_key, Arc::new(SystemClock))
+    }
+
+    pub fn with_clock(repo: Arc<R>, enrollment_key: SigningKey, clock: Arc<dyn Clock>) -> Self {
         Self {
             repo,
             enrollment_key,
             credential_ttl: DEFAULT_CREDENTIAL_TTL,
+            clock,
         }
     }
 
@@ -103,31 +139,74 @@ impl<R: EndpointRepository> EnrollmentService<R> {
     /// completed — this method has no notion of TLS/WSS itself.
     ///
     /// The decision (first-contact-vs-known-Endpoint branching, enrollment
-    /// verification, chain authentication) is handed to the repository as a
-    /// closure so it executes *inside* the Adapter's lock/transaction scope
-    /// on the Endpoint's current state — never on a state read before that
-    /// lock was acquired (ADR-0012 point 7 commit-time concurrency;
-    /// `crate::ports::EndpointRepository::redeem`).
+    /// verification, chain authentication, genuine-reboot fallback) is
+    /// handed to the repository as a closure so it executes *inside* the
+    /// Adapter's lock/transaction scope on the Endpoint's current state —
+    /// never on a state read before that lock was acquired (ADR-0012 point 7
+    /// commit-time concurrency; `crate::ports::EndpointRepository::redeem`).
+    /// `now` is deliberately not a parameter here: the closure reads
+    /// `self.clock.now()` itself, at the moment the Adapter actually invokes
+    /// it (i.e. after the lock), so credential-validity decisions are never
+    /// made against a timestamp captured before a lock wait of unknown
+    /// duration (ADR-0012: "the credential presented needs to remain valid
+    /// at the commit that accepts the redemption").
     pub async fn redeem(
         &self,
         inventory_signal: &str,
         presented: CredentialSecret,
-        now: DateTime<Utc>,
     ) -> Result<RedeemResult, ApplicationError> {
         let signal = inventory_signal.to_string();
         let ttl = self.credential_ttl;
         let key = self.enrollment_key.clone();
-        let decide: crate::ports::RedeemDecision = Box::new(move |existing| match existing {
-            None => {
-                // First-seen Endpoint: the presented value must itself be a
-                // valid, unexpired enrollment credential — otherwise this is
-                // a rejected AuthRequest, not a transition to persist.
-                if !enrollment::verify(&key, &presented, now) {
-                    return transitions::RedeemOutcome::Rejected;
+        let clock = Arc::clone(&self.clock);
+        let decide: crate::ports::RedeemDecision = Box::new(move |existing| {
+            // Read here, not before — this closure body only ever runs
+            // after the Adapter has acquired its lock for this
+            // inventory_signal/Endpoint.
+            let now = clock.now();
+            match existing {
+                None => {
+                    // First-seen Endpoint: the presented value must itself
+                    // be a valid, unexpired enrollment credential —
+                    // otherwise this is a rejected AuthRequest, not a
+                    // transition to persist.
+                    if !enrollment::verify(&key, &presented, now) {
+                        return transitions::RedeemOutcome::Rejected;
+                    }
+                    transitions::first_contact(signal, presented, now, ttl)
                 }
-                transitions::first_contact(signal, presented, now, ttl)
+                Some(aggregate) => {
+                    match transitions::redeem_known(&aggregate, &presented, now, ttl) {
+                        established @ transitions::RedeemOutcome::Established { .. } => established,
+                        transitions::RedeemOutcome::Rejected => {
+                            // The presented value did not match this known
+                            // Endpoint's current chain. A fresh, valid
+                            // boot-scoped enrollment credential still
+                            // legitimately re-establishes a brand-new chain
+                            // — "genuine reboot" (ADR-0012 point 1: E2 ->
+                            // fresh runtime credential). Identity continuity
+                            // is preserved and operator approval is not
+                            // re-run (ADR-0004 "Reconnect handling").
+                            //
+                            // Deliberately NOT attempted when the current
+                            // chain is `CredentialRevoked`: whether an
+                            // explicit revocation should survive a genuine
+                            // reboot is an open policy question no current
+                            // ADR/Specification decides (Issue #17 session
+                            // report) — this preserves the pre-existing
+                            // Rejected outcome for that combination rather
+                            // than silently choosing a policy.
+                            if aggregate.credential.is_revoked() {
+                                transitions::RedeemOutcome::Rejected
+                            } else if enrollment::verify(&key, &presented, now) {
+                                transitions::genuine_reboot(&aggregate, presented, now, ttl)
+                            } else {
+                                transitions::RedeemOutcome::Rejected
+                            }
+                        }
+                    }
+                }
             }
-            Some(aggregate) => transitions::redeem_known(&aggregate, &presented, now, ttl),
         });
 
         let outcome = self.repo.redeem(inventory_signal, decide).await?;

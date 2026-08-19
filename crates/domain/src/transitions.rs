@@ -1,8 +1,9 @@
 //! Assembles the pure state-machine modules (`identity`, `credential`) into
 //! the concrete durable transitions WP1 requires, each producing a
 //! [`TransitionOutcome`] ready for atomic persistence
-//! (ADR-0007 "Transactional consistency between domain state, domain events,
-//! and audit records").
+//! (ADR-0013 "PostgreSQL persistence backend baseline", carrying forward
+//! ADR-0007's "Transactional consistency between domain state, domain
+//! events, and audit records").
 //!
 //! Every [`TransitionOutcome`] returned here is constructed exclusively by
 //! this module, so an Application-layer caller can never hand-assemble a
@@ -123,6 +124,62 @@ pub fn redeem_known(
             successor_confirmed,
         },
         AuthOutcome::Rejected => RedeemOutcome::Rejected,
+    }
+}
+
+/// Genuine reboot of an already-known Endpoint (ADR-0012 point 1):
+///
+/// ```text
+/// same boot:      E1 -> R1 -> R2 -> ...
+/// genuine reboot: E2 (new enrollment credential) -> fresh runtime credential -> ...
+/// ```
+///
+/// A fresh, valid boot-scoped enrollment credential establishes a brand-new
+/// runtime-credential chain for the Endpoint's existing durable identity —
+/// the old chain is superseded in full, exactly as `CredentialChain::establish`
+/// already does for a first-seen Endpoint, since "a runtime credential does
+/// not need to survive a genuine Agent reboot" (ADR-0012 point 1). Endpoint
+/// identity/lifecycle state (`PendingEnrollment`/`Enrolled`/`Retired`) is
+/// preserved unchanged: this is a credential-dimension transition only,
+/// never a re-run of operator approval (ADR-0004 "Reconnect handling";
+/// `m0-endpoint-identity-lifecycle.md` "Reconnect / credential renewal
+/// handling"). No domain event is emitted, for the same reason routine
+/// rotation emits none (ADR-0012 point 9) — the credential dimension does
+/// not itself change value across a genuine reboot, it is simply
+/// re-established.
+///
+/// The caller must have already independently verified `presented` as a
+/// legitimate, unexpired enrollment credential (`credential::enrollment::verify`),
+/// exactly as `first_contact` requires. The caller must also decide,
+/// *before* calling this function, whether a currently `CredentialRevoked`
+/// chain may be re-established this way at all — this function does not
+/// decide that policy question and must not be called for a revoked chain
+/// until it is resolved (see Issue #17 session notes: whether an explicit
+/// revocation survives a genuine reboot is an open question no current
+/// ADR/Specification answers).
+pub fn genuine_reboot(
+    aggregate: &EndpointAggregate,
+    presented: CredentialSecret,
+    now: DateTime<Utc>,
+    ttl: Duration,
+) -> RedeemOutcome {
+    let (chain, issued) = CredentialChain::establish(presented, now, ttl);
+    let issued_expires_at = now + ttl;
+
+    RedeemOutcome::Established {
+        outcome: TransitionOutcome {
+            endpoint: EndpointAggregate {
+                credential: chain,
+                updated_at: now,
+                ..aggregate.clone()
+            },
+            events: vec![],
+            audit: None,
+        },
+        issued,
+        issued_expires_at,
+        first_contact: false,
+        successor_confirmed: false,
     }
 }
 
@@ -251,6 +308,70 @@ mod tests {
             }
             RedeemOutcome::Rejected => panic!("R1 must authenticate"),
         }
+    }
+
+    #[test]
+    fn genuine_reboot_reestablishes_chain_preserving_identity_and_id() {
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            "mac:AA:BB".into(),
+            CredentialSecret("e1".into()),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        ) else {
+            panic!()
+        };
+        let original_id = first.endpoint.id;
+
+        let RedeemOutcome::Established {
+            outcome: rebooted,
+            issued: e2_issued,
+            ..
+        } = genuine_reboot(
+            &first.endpoint,
+            CredentialSecret("e2".into()),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        else {
+            panic!("genuine reboot must establish a fresh chain")
+        };
+
+        assert_eq!(
+            rebooted.endpoint.id, original_id,
+            "identity must be preserved across reboot"
+        );
+        assert_eq!(
+            rebooted.endpoint.identity, first.endpoint.identity,
+            "identity lifecycle state must not change on genuine reboot"
+        );
+        assert!(
+            rebooted.events.is_empty(),
+            "genuine reboot must not emit a domain event"
+        );
+        assert!(rebooted.audit.is_none());
+
+        // The fresh successor from the reboot authenticates against the new
+        // chain...
+        assert!(matches!(
+            credential::authenticate(
+                &rebooted.endpoint.credential,
+                &e2_issued,
+                now(),
+                DEFAULT_CREDENTIAL_TTL
+            ),
+            AuthOutcome::Accepted { .. }
+        ));
+        // ...but nothing from the pre-reboot chain does: it was fully
+        // superseded, not merged.
+        assert_eq!(
+            credential::authenticate(
+                &rebooted.endpoint.credential,
+                &CredentialSecret("e1".into()),
+                now(),
+                DEFAULT_CREDENTIAL_TTL
+            ),
+            AuthOutcome::Rejected
+        );
     }
 
     #[test]

@@ -15,8 +15,41 @@
 //! carries the `bamep_wp1_test_` prefix it generates itself, so teardown
 //! never touches a database this harness did not itself create.
 
+use std::sync::Mutex;
+
+use bamep_server::application::Clock;
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// Deterministic, test-controllable [`Clock`]: `EnrollmentService::redeem`
+/// reads it at decision time (inside the Adapter's lock), so a test
+/// controls exactly what "now" the Domain sees by calling `set`/`advance`
+/// — including, unlike a plain fixed timestamp, *while* another task is
+/// concurrently blocked on the same PostgreSQL lock (`docs/development/testing.md`
+/// "Test isolation": deterministic fixtures).
+pub struct ManualClock(Mutex<DateTime<Utc>>);
+
+impl ManualClock {
+    pub fn new(now: DateTime<Utc>) -> Self {
+        Self(Mutex::new(now))
+    }
+
+    pub fn set(&self, now: DateTime<Utc>) {
+        *self.0.lock().unwrap() = now;
+    }
+
+    pub fn advance(&self, delta: Duration) {
+        let mut guard = self.0.lock().unwrap();
+        *guard += delta;
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> DateTime<Utc> {
+        *self.0.lock().unwrap()
+    }
+}
 
 fn admin_url() -> String {
     std::env::var("BAMEP_TEST_PG_ADMIN_URL")
