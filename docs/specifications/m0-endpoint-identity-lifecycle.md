@@ -143,7 +143,7 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (`Accepted`; operator-approval-gated first enrollment is the M0 default).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of precondition 7 (`trusted bootstrap established`).
 - ADR-0011 — V1 site trust-anchor establishment and operator-verified first-key pairing (`Accepted`) — resolves only sub-problem (B), how an Endpoint legitimately learns the site's trust-anchor public key. The concrete representation/state machine for the trusted-bootstrap fact itself (precondition 7) is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13, `Approved`), not by this ADR.
-- ADR-0012 — Runtime Agent credential issuance, rotation, and reconnect recovery (`Proposed`) — the credential-chain/grace/replacement/confirmation/revocation model this Specification's "Credential chain, rotation, and revocation" subsection defines.
+- ADR-0012 — Runtime Agent credential issuance, rotation, and reconnect recovery (`Accepted`) — the credential-chain/grace/replacement/confirmation/revocation model this Specification's "Credential chain, rotation, and revocation" subsection defines.
 
 ## Related work
 

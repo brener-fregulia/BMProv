@@ -188,7 +188,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - ADR-0004 — Endpoint identity and enrollment/trust bootstrap model (credential this handshake validates; `CredentialActive`/`CredentialRevoked` transfer-authorization issuance checks).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — establishes `trusted bootstrap established` as the security property `BootstrapEvidence` makes Server-observable.
 - ADR-0008 — Data-plane transport, chunking, and resumability strategy (`Accepted`) — point 9 is the decision `TransferAuthorizationRequest`/`Grant`/`Denied` carry over this protocol.
-- ADR-0012 — Runtime Agent credential issuance, rotation, and reconnect recovery (`Proposed`) — the `SessionEstablished` extension and credential-chain semantics in "Runtime credential issuance and rotation" above.
+- ADR-0012 — Runtime Agent credential issuance, rotation, and reconnect recovery (`Accepted`) — the `SessionEstablished` extension and credential-chain semantics in "Runtime credential issuance and rotation" above.
 
 ## Related work
 
