@@ -55,8 +55,8 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
 2. **Persist-before-send ordering.** On a successful `AuthRequest`, durable Endpoint
    identity/credential changes (predecessor grace bookkeeping, the newly minted successor, and —
    on first contact only — `PendingEnrollment` creation and the `NoActiveCredential →
-   CredentialActive` transition) commit in one SQLite transaction, consistent with the atomic
-   state+event+audit model already required by ADR-0007 /
+   CredentialActive` transition) commit in one atomic persistence transaction, consistent with the
+   atomic state+event+audit model already required by ADR-0013 (carrying forward ADR-0007) /
    `m0-persistence-observability-and-domain-events.md`. Only after that commit does the Server
    attempt to deliver `SessionEstablished` (carrying the new credential) over WSS. A database
    transaction and a WebSocket send cannot be atomic with each other — the same constraint
@@ -176,8 +176,8 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
 - `docs/specifications/m0-agent-protocol-contract.md` — the `SessionEstablished` wire contract
   this ADR's model extends.
 - `docs/specifications/m0-persistence-observability-and-domain-events.md` — the atomic
-  state+event+audit transaction model (ADR-0007) this ADR's persist-before-send ordering and
-  rotation/event distinction rely on.
+  state+event+audit transaction model (originally ADR-0007, carried forward by ADR-0013) this
+  ADR's persist-before-send ordering and rotation/event distinction rely on.
 
 ## Related work
 
@@ -187,8 +187,13 @@ ADR-0004's enrollment/bootstrap model or ADR-0005's transport/handshake/typed-me
 - ADR-0005 — Agent control-plane protocol and typed-action model (`Accepted`) — the
   WSS/typed-envelope/handshake decisions this ADR consumes without reopening; `SessionEstablished`'s
   existence and its role in establishing `CredentialActive`.
-- ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`) — the crash-safe
-  persist-before-send ordering pattern this ADR applies to credential issuance.
+- ADR-0013 — PostgreSQL persistence backend baseline (`Accepted`) — the current persistence
+  backend; carries forward the crash-safe persist-before-send ordering pattern this ADR applies to
+  credential issuance.
+- ADR-0007 — Persistence backend and durable/transient boundary (`Superseded by ADR-0013`) —
+  originally established the crash-safe persist-before-send ordering pattern this ADR applies to
+  credential issuance; the backend-independent pattern itself is unchanged and is carried forward
+  by ADR-0013.
 - Issue #17 — `[WP] Establish simulated Endpoint trust, enrollment, and Agent session` — the Work
   Package whose Discovery surfaced this gap, and which implements this ADR's model; its
   previously recorded "Reading A" is superseded by this ADR.

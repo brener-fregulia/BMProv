@@ -4,18 +4,18 @@ Status: **Approved**
 
 ## Context
 
-This Specification details the durable/transient persistence boundary accepted in ADR-0007, the domain-event catalog, the observability correlation model, and inventory/auditability boundaries required by M0, executing Issue #5 (`[WP] Define persistence, observability, and domain-event model`).
+This Specification details the durable/transient persistence boundary originally accepted in ADR-0007 and carried forward unchanged by ADR-0013 (`Accepted`; ADR-0007 is `Superseded by ADR-0013` for the backend selection only), the domain-event catalog, the observability correlation model, and inventory/auditability boundaries required by M0, executing Issue #5 (`[WP] Define persistence, observability, and domain-event model`).
 
 ## Durable vs. transient/high-frequency data
 
-Restates and applies ADR-0007's boundary (see that ADR for full reasoning):
+Restates and applies the durable/transient boundary ADR-0007 established and ADR-0013 carries forward unchanged (see those ADRs for full reasoning):
 
-- **Durable** (written to the SQLite-backed domain database, on state *transition*, not on observation): Job/JobStep/Attempt state transitions; Endpoint identity/credential/hardware-confidence state transitions; inventory on revision change only; Artifact/Snapshot metadata on lifecycle transition; domain events; audit records for safety-relevant operator decisions.
+- **Durable** (written to the PostgreSQL-backed domain database, on state *transition*, not on observation): Job/JobStep/Attempt state transitions; Endpoint identity/credential/hardware-confidence state transitions; inventory on revision change only; Artifact/Snapshot metadata on lifecycle transition; domain events; audit records for safety-relevant operator decisions.
 - **Transient/high-frequency** (not one durable write per message/sample): Agent connection/presence state; `ActionProgress` ticks (latest-value only); general logs; high-frequency telemetry/metrics.
 
 Any future Work Package or implementation that persists new state must classify it against this boundary explicitly rather than defaulting to "durable."
 
-**This boundary is an architectural expectation, not yet an empirically validated result** (ADR-0007). It bounds write volume to the number of domain-state transitions rather than message/sample count, but it does not make database load independent of endpoint count — more concurrent endpoints still produce more transitions. Whether the resulting load is comfortable for SQLite at the M0 20–24 endpoint target is measured empirically by the post-M0 first implementation vertical slice, running the persistence-load scenario Issue #7's Specification defines (see "Validation expectations"). This measurement is not itself part of the M0 architecture/contract baseline — no implementation exists during M0 to run it against.
+**This boundary is an architectural expectation, not yet an empirically validated result** (originally ADR-0007; carried forward unchanged by ADR-0013). It bounds write volume to the number of domain-state transitions rather than message/sample count, but it does not make database load independent of endpoint count — more concurrent endpoints still produce more transitions. Whether the resulting load is comfortable for the adopted persistence backend (PostgreSQL, ADR-0013) at the M0 20–24 endpoint target is measured empirically by the post-M0 first implementation vertical slice, running the persistence-load scenario Issue #7's Specification defines (see "Validation expectations"). This measurement is not itself part of the M0 architecture/contract baseline — no implementation exists during M0 to run it against.
 
 ## Domain-event model
 
@@ -111,7 +111,7 @@ Required audit records associated with a domain transition participate in the sa
 ## Out of scope
 
 - concrete database schema, indexing, or migration strategy — implementation-time;
-- concrete performance thresholds for SQLite write contention/latency/backpressure — owned by Issue #7's validation, not defined here;
+- concrete performance thresholds for the adopted persistence backend's write contention/latency/backpressure — owned by Issue #7's validation, not defined here;
 - external event transport, webhook mechanism, message broker, or ERP-facing API — not defined by this Specification;
 - operator-identity/authentication model for audit-record attribution — not yet a dedicated M0 Work Package;
 - artifact-specific event shapes — owned by ADR-0008 point 10 / `docs/specifications/m0-data-plane-and-storage-contracts.md`;
@@ -132,7 +132,7 @@ Per `docs/development/testing.md` "Contract tests": domain-event schema/versioni
 
 Per `docs/development/testing.md` "Persistence and recovery tests": durable state survives restart; transient/high-frequency data (presence, progress) does not need to, and its absence after restart must not be misinterpreted as a domain-state loss.
 
-Per `docs/development/testing.md` "Simulator", and per ADR-0007: the post-M0 first implementation vertical slice **must** exercise representative persistence load at the M0 20–24 concurrent-endpoint target, measuring actual durable write volume, contention, latency, and backpressure against the expectation in ADR-0007. If that measurement shows unacceptable results, ADR-0007 must be revisited. This is a requirement on the scenario Issue #7's Specification defines (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Persistence-load validation"), not implemented by this Specification, and this Specification does not define the concrete performance thresholds that would make a result "unacceptable" — that determination belongs to the vertical slice that runs the measurement, informed by observed behavior. This obligation is a defined, non-optional part of post-M0 validation, not a precondition for the M0 architecture/contract baseline itself: the baseline is complete when its own acceptance criteria are satisfied (`docs/specifications/m0-architecture-baseline.md`), and the absence of an implementation during M0 is expected, not a contradiction or license to fabricate performance evidence.
+Per `docs/development/testing.md` "Simulator", and per ADR-0013 (obligation originally established by ADR-0007): the post-M0 first implementation vertical slice **must** exercise representative persistence load at the M0 20–24 concurrent-endpoint target, measuring actual durable write volume, contention, latency, and backpressure against the expectation carried forward in ADR-0013. If that measurement shows unacceptable results, ADR-0013 must be revisited. This is a requirement on the scenario Issue #7's Specification defines (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Persistence-load validation"), not implemented by this Specification, and this Specification does not define the concrete performance thresholds that would make a result "unacceptable" — that determination belongs to the vertical slice that runs the measurement, informed by observed behavior. This obligation is a defined, non-optional part of post-M0 validation, not a precondition for the M0 architecture/contract baseline itself: the baseline is complete when its own acceptance criteria are satisfied (`docs/specifications/m0-architecture-baseline.md`), and the absence of an implementation during M0 is expected, not a contradiction or license to fabricate performance evidence.
 
 Per "Unit and domain tests": atomic-transaction tests demonstrating that a domain-state change, its required domain event, and any required audit record commit or fail together — never partially.
 
@@ -142,7 +142,8 @@ Manual: owner approval of this Specification — confirmed (see Status).
 
 ## Related ADRs
 
-- ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`).
+- ADR-0013 — PostgreSQL persistence backend baseline (`Accepted`) — the current persistence-backend authority; carries forward the durable/transient boundary, transactional-consistency, and persist-before-send invariants this Specification applies.
+- ADR-0007 — Persistence backend and durable/transient boundary (`Superseded by ADR-0013`) — historical record of the original M0 backend evaluation; the backend-independent invariants it established remain authoritative through ADR-0013, not through this now-superseded document.
 - ADR-0004 — Endpoint identity (durable identity/credential/confidence state this Specification's events cover).
 - ADR-0005 — Agent control-plane protocol (`ActionProgress` as the canonical high-frequency, non-durable example; `action_id` as the distinct-but-linked counterpart to `attempt_id` in the correlation model).
 - ADR-0006 — Job/JobStep/Attempt state model (durable state and `Indeterminate` this Specification's events cover).

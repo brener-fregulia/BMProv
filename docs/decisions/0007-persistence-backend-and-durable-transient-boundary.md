@@ -1,6 +1,21 @@
 # ADR-0007: Persistence backend and durable/transient boundary
 
-Status: Accepted
+Status: Superseded by ADR-0013
+
+**Superseded note (added, body otherwise unchanged as historical record):** the
+backend selection in "Decision" §1 ("SQLite is accepted as the M0 persistence
+backend") and the SQLite-specific reasoning in "Alternatives considered" are
+superseded by `docs/decisions/0013-postgresql-persistence-backend-baseline.md`
+(`Accepted`), which adopts PostgreSQL as the persistence backend baseline.
+ADR-0013 explicitly carries forward, as directly authoritative, every invariant
+established below that is independent of the backend choice — the durable vs.
+transient/high-frequency boundary; atomic domain-state + domain-event + audit-
+record commit; the repository Port/Adapter boundary; persist-before-send; "not
+event sourcing"; and the rejection of a domain model constrained to a
+lowest-common-denominator SQL subset. A future session needing those invariants
+should read them as authoritative in ADR-0013, not reconstruct them from this now-
+`Superseded` document. The remainder of this ADR is preserved unedited below as
+the historical record of the original M0 evaluation and its reasoning.
 
 ## Context
 

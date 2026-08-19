@@ -30,8 +30,9 @@ a Simulated Endpoint connects, authenticates/enrolls, reports inventory, has a J
 created, is scheduled, receives a dispatched typed action, executes a simulated
 transfer, has progress/events persisted, survives disconnect/reconnect, reaches a
 terminal Job state, and has that result observable through Bamep Web — entirely
-without physical endpoint hardware, and empirically validate the ADR-0007
-persistence-load expectation and the 20–24 concurrent Simulated Endpoint scenario
+without physical endpoint hardware, and empirically validate the ADR-0013
+persistence-load expectation (originally established by ADR-0007) and the 20–24
+concurrent Simulated Endpoint scenario
 required by M0.
 
 ## Scope
@@ -57,8 +58,8 @@ required by M0.
   full destructive-operation precondition gate
   (`m0-job-lifecycle-and-scheduling.md`, `m0-endpoint-identity-lifecycle.md`);
 - durable/transient persistence split, domain events, and audit records
-  (`m0-persistence-observability-and-domain-events.md`), on SQLite as the accepted
-  entering baseline (ADR-0007);
+  (`m0-persistence-observability-and-domain-events.md`), on PostgreSQL as the
+  accepted entering baseline (ADR-0013, superseding ADR-0007's SQLite selection);
 - data-plane chunked transfer, transfer-session authentication, and Artifact
   lifecycle (`m0-data-plane-and-storage-contracts.md`);
 - Administrative API v1 read surface and a minimal Bamep Web read view
@@ -147,8 +148,9 @@ mechanism, distinct from Bamep Web.
   exclusively through Administrative API v1 reads.
 - RF-007: The Simulator orchestrates 20–24 concurrent Simulated Endpoints
   specifically to exercise the three scenario categories M0 explicitly ties to
-  that concurrency target: scheduler contention, the ADR-0007 persistence-load
-  measurement, and data-plane chunked transfer at scale
+  that concurrency target: scheduler contention, the ADR-0013 persistence-load
+  measurement (obligation originally established by ADR-0007), and data-plane
+  chunked transfer at scale
   (`m0-simulator-contract-and-validation-strategy.md` "Concurrency target"). The
   remaining required Simulator scenarios (duplicate/delayed messages, stale
   inventory, endpoint disappearance, Agent restart, Server restart, resource
@@ -160,17 +162,19 @@ mechanism, distinct from Bamep Web.
 
 ## Non-functional requirements
 
-- NF-001 (persistence-load empirical validation): SQLite is the accepted baseline
-  entering M1 (ADR-0007). M1 must execute the empirical measurement ADR-0007
-  already requires — durable write volume, contention, latency, and backpressure
-  under sustained concurrent Job/JobStep/Attempt activity at the 20–24 endpoint
-  target — and record the actual observed result. No numeric acceptance threshold
-  is invented before that measurement runs
-  (`m0-simulator-contract-and-validation-strategy.md` "Persistence-load
-  validation"). If the representative 20–24-endpoint measurement shows
-  unacceptable contention, latency, write pressure, or backpressure, ADR-0007 must
-  be explicitly revisited — a pre-declared contingency, not something to be
-  silently worked around in implementation.
+- NF-001 (persistence-load empirical validation): PostgreSQL is the accepted
+  baseline entering M1 (ADR-0013, superseding ADR-0007's SQLite selection while
+  carrying forward its durable-write-model expectation). M1 must execute the
+  empirical measurement ADR-0013 requires — durable write volume, contention,
+  latency, and backpressure under sustained concurrent Job/JobStep/Attempt
+  activity at the 20–24 endpoint target — and record the actual observed result
+  against the adopted PostgreSQL backend, not merely assumed acceptable because a
+  different backend was chosen. No numeric acceptance threshold is invented before
+  that measurement runs (`m0-simulator-contract-and-validation-strategy.md`
+  "Persistence-load validation"). If the representative 20–24-endpoint measurement
+  shows unacceptable contention, latency, write pressure, or backpressure,
+  ADR-0013 must be explicitly revisited — a pre-declared contingency, not
+  something to be silently worked around in implementation.
 - NF-002 (reference environment): Linux is Bamep's development and production
   reference environment (`AGENTS.md`). Automated validation targeting
   Linux-specific responsibilities must be executed in a genuinely Linux
@@ -201,10 +205,10 @@ simulated — none touch physical hardware or physical disks.
 
 Rust modular monolith with Worker process isolation (ADR-0001); Server in Rust
 (ADR-0002); Agent/Worker in Rust with contract-independence from wire protocols
-(ADR-0003); SQLite persistence behind the `repositories` Port as the accepted
-entering baseline, subject to NF-001 (ADR-0007); Presentation / Application /
-Domain / Runtime Services / Ports / Adapters / Workers as dependency boundaries,
-not a mandated crate/package/module layout
+(ADR-0003); PostgreSQL persistence behind the `repositories` Port as the accepted
+entering baseline, subject to NF-001 (ADR-0013, superseding ADR-0007);
+Presentation / Application / Domain / Runtime Services / Ports / Adapters /
+Workers as dependency boundaries, not a mandated crate/package/module layout
 (`m0-stack-and-boundaries-baseline.md`). M1 is not responsible for empirically
 revalidating every M0 decision — see "Traceability" below.
 
@@ -218,10 +222,14 @@ Directly exercised by M1: `m0-architecture-baseline.md`,
 `m0-simulator-contract-and-validation-strategy.md`,
 `m0-administrative-api-web-read-contract.md`,
 `m0-trusted-bootstrap-and-server-fingerprint-contract.md`; ADR-0004 through
-ADR-0008; ADR-0010 (fixture-level trusted-bootstrap substitution only, per its own
-allowance for a deterministic non-production fixture — not real Secure
-Boot/firmware mechanics); ADR-0012 (runtime Agent credential issuance, rotation,
-and reconnect recovery — directly exercised by WP1).
+ADR-0006, ADR-0008; ADR-0010 (fixture-level trusted-bootstrap substitution only,
+per its own allowance for a deterministic non-production fixture — not real
+Secure Boot/firmware mechanics); ADR-0012 (runtime Agent credential issuance,
+rotation, and reconnect recovery — directly exercised by WP1); ADR-0013
+(PostgreSQL persistence backend baseline, superseding ADR-0007's SQLite selection
+while carrying forward its durable/transient boundary and transactional-
+consistency invariants — directly exercised by every M1 Work Package that
+persists durable state).
 
 Architectural constraints preserved (followed, not empirically retested by M1):
 ADR-0001 (modular monolith, Worker process isolation), ADR-0002 (Server: Rust),

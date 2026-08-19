@@ -71,7 +71,7 @@ A runtime credential does not need to survive a genuine Agent reboot — a new b
 
 **Durable representation.** This model never requires the Server to store or reconstruct a previously issued plaintext runtime credential. The concrete representation (e.g., a salted hash verified against a presented value, or a self-verifying signed capability) remains implementation-time, provided it satisfies the properties above.
 
-**Persist-before-send.** Durable credential/identity changes commit in one SQLite transaction (consistent with the atomic state+event+audit model, ADR-0007) before the Server attempts delivery over WSS — a database transaction and a WebSocket send cannot be atomic with each other (the same constraint already governing `ActionDispatch`, `m0-persistence-observability-and-domain-events.md` "Transactional consistency and event model"). A crash or dropped connection between commit and delivery is an expected case, recovered by the replacement rule above rather than by any special-cased reconciliation.
+**Persist-before-send.** Durable credential/identity changes commit in one atomic persistence transaction (consistent with the atomic state+event+audit model, ADR-0013, carrying forward ADR-0007) before the Server attempts delivery over WSS — a database transaction and a WebSocket send cannot be atomic with each other (the same constraint already governing `ActionDispatch`, `m0-persistence-observability-and-domain-events.md` "Transactional consistency and event model"). A crash or dropped connection between commit and delivery is an expected case, recovered by the replacement rule above rather than by any special-cased reconciliation.
 
 Full reasoning and rejected alternatives: ADR-0012.
 
