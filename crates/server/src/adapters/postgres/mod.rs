@@ -1,0 +1,30 @@
+//! PostgreSQL Adapter behind the `EndpointRepository` Port (ADR-0013
+//! "PostgreSQL persistence backend baseline"). Domain and Application code
+//! never reference `sqlx` or PostgreSQL-specific types directly — only this
+//! module does. Composition/exposure only: schema evolution lives in
+//! `../../../migrations`, and the `EndpointRepository` implementation lives
+//! in `repository.rs`.
+
+mod repository;
+
+pub use repository::PostgresEndpointRepository;
+
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+
+/// Compiled-in migration set (`crates/server/migrations/`), embedded at
+/// build time so the running Server never depends on an external migration
+/// CLI or an on-disk migrations directory at runtime.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// Connects a bounded pool to `database_url` and applies every pending
+/// migration. The only entry point that should be used to obtain a
+/// [`PostgresEndpointRepository`] outside of tests.
+pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+    Ok(pool)
+}

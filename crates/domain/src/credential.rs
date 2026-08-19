@@ -65,6 +65,28 @@ impl CredentialHash {
         let candidate = Self::of_with_salt(secret, self.salt);
         candidate.digest.ct_eq(&self.digest).into()
     }
+
+    /// Opaque byte representation for relational persistence (ADR-0013 Sec.6:
+    /// an "opaque credential/assertion blob" is an accepted non-relational
+    /// column even under a relational-first schema). Never reversible to the
+    /// original secret — salt and digest are already one-way outputs.
+    pub fn to_bytes(&self) -> [u8; 48] {
+        let mut out = [0u8; 48];
+        out[..16].copy_from_slice(&self.salt);
+        out[16..].copy_from_slice(&self.digest);
+        out
+    }
+
+    /// Reconstructs a hash from its durable byte representation
+    /// (`to_bytes`). Adapter-facing only: never called from any transition
+    /// or authentication logic in this module.
+    pub fn from_bytes(bytes: [u8; 48]) -> Self {
+        let mut salt = [0u8; 16];
+        let mut digest = [0u8; 32];
+        salt.copy_from_slice(&bytes[..16]);
+        digest.copy_from_slice(&bytes[16..]);
+        Self { salt, digest }
+    }
 }
 
 /// One credential in the chain: its durable hash plus its validity window
@@ -167,6 +189,40 @@ impl CredentialChain {
             predecessor: self.predecessor.clone(),
             successor: self.successor.clone(),
             revoked: true,
+        }
+    }
+
+    /// Read-only access to the chain's parts, for a relational Adapter to
+    /// decompose a chain into its durable columns. No transition or
+    /// authentication decision may be reimplemented from these accessors
+    /// outside this module (`AGENTS.md` "Architecture and dependencies").
+    pub fn predecessor(&self) -> &CredentialSlot {
+        &self.predecessor
+    }
+
+    pub fn successor(&self) -> Option<&CredentialSlot> {
+        self.successor.as_ref()
+    }
+
+    pub fn is_revoked(&self) -> bool {
+        self.revoked
+    }
+
+    /// Reconstructs a chain from its durable parts. Adapter-facing only: a
+    /// relational Adapter reloading a previously committed row is the only
+    /// legitimate caller — this constructor trusts the caller to hand back
+    /// exactly what a prior `establish`/`authenticate`/`revoke` call
+    /// produced, and enforces no invariant of its own beyond the type
+    /// signature.
+    pub fn from_parts(
+        predecessor: CredentialSlot,
+        successor: Option<CredentialSlot>,
+        revoked: bool,
+    ) -> Self {
+        Self {
+            predecessor,
+            successor,
+            revoked,
         }
     }
 }

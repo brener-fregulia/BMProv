@@ -14,7 +14,7 @@ use bamep_domain::{
 };
 use chrono::{DateTime, Duration, Utc};
 
-use crate::ports::{EndpointRepository, RepositoryError};
+use crate::ports::{EndpointRepository, EndpointUpdateError, RepositoryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApplicationError {
@@ -24,6 +24,16 @@ pub enum ApplicationError {
     InvalidTransition(#[from] InvalidIdentityTransition),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+}
+
+impl From<EndpointUpdateError> for ApplicationError {
+    fn from(err: EndpointUpdateError) -> Self {
+        match err {
+            EndpointUpdateError::NotFound(id) => ApplicationError::EndpointNotFound(id),
+            EndpointUpdateError::InvalidTransition(e) => ApplicationError::InvalidTransition(e),
+            EndpointUpdateError::Repository(e) => ApplicationError::Repository(e),
+        }
+    }
 }
 
 /// Outcome of redeeming a presented credential in a fresh `AuthRequest`,
@@ -91,57 +101,49 @@ impl<R: EndpointRepository> EnrollmentService<R> {
     /// (not-yet-implemented, future round) Agent Control Gateway on every
     /// connection attempt, after the Server's own TLS layer has already
     /// completed — this method has no notion of TLS/WSS itself.
+    ///
+    /// The decision (first-contact-vs-known-Endpoint branching, enrollment
+    /// verification, chain authentication) is handed to the repository as a
+    /// closure so it executes *inside* the Adapter's lock/transaction scope
+    /// on the Endpoint's current state — never on a state read before that
+    /// lock was acquired (ADR-0012 point 7 commit-time concurrency;
+    /// `crate::ports::EndpointRepository::redeem`).
     pub async fn redeem(
         &self,
         inventory_signal: &str,
         presented: CredentialSecret,
         now: DateTime<Utc>,
     ) -> Result<RedeemResult, ApplicationError> {
-        match self.repo.find_by_inventory_signal(inventory_signal).await? {
+        let signal = inventory_signal.to_string();
+        let ttl = self.credential_ttl;
+        let key = self.enrollment_key.clone();
+        let decide: crate::ports::RedeemDecision = Box::new(move |existing| match existing {
             None => {
                 // First-seen Endpoint: the presented value must itself be a
                 // valid, unexpired enrollment credential — otherwise this is
                 // a rejected AuthRequest, not a transition to persist.
-                if !enrollment::verify(&self.enrollment_key, &presented, now) {
-                    return Ok(RedeemResult::Rejected);
+                if !enrollment::verify(&key, &presented, now) {
+                    return transitions::RedeemOutcome::Rejected;
                 }
-                let outcome = transitions::first_contact(
-                    inventory_signal.to_string(),
-                    presented,
-                    now,
-                    self.credential_ttl,
-                );
-                self.apply(outcome).await
+                transitions::first_contact(signal, presented, now, ttl)
             }
-            Some(aggregate) => {
-                let outcome =
-                    transitions::redeem_known(&aggregate, &presented, now, self.credential_ttl);
-                self.apply(outcome).await
-            }
-        }
-    }
+            Some(aggregate) => transitions::redeem_known(&aggregate, &presented, now, ttl),
+        });
 
-    async fn apply(
-        &self,
-        outcome: transitions::RedeemOutcome,
-    ) -> Result<RedeemResult, ApplicationError> {
-        match outcome {
+        let outcome = self.repo.redeem(inventory_signal, decide).await?;
+        Ok(match outcome {
             transitions::RedeemOutcome::Established {
                 outcome,
                 issued,
                 issued_expires_at,
                 ..
-            } => {
-                let endpoint_id = outcome.endpoint.id;
-                self.repo.commit(outcome).await?;
-                Ok(RedeemResult::Established {
-                    endpoint_id,
-                    runtime_credential: issued,
-                    credential_expires_at: issued_expires_at,
-                })
-            }
-            transitions::RedeemOutcome::Rejected => Ok(RedeemResult::Rejected),
-        }
+            } => RedeemResult::Established {
+                endpoint_id: outcome.endpoint.id,
+                runtime_credential: issued,
+                credential_expires_at: issued_expires_at,
+            },
+            transitions::RedeemOutcome::Rejected => RedeemResult::Rejected,
+        })
     }
 
     /// The operator-approval control path
@@ -157,13 +159,9 @@ impl<R: EndpointRepository> EnrollmentService<R> {
         operator: Actor,
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationError> {
-        let aggregate = self
-            .repo
-            .find_by_id(endpoint_id)
-            .await?
-            .ok_or(ApplicationError::EndpointNotFound(endpoint_id))?;
-        let outcome = transitions::approve_enrollment(&aggregate, operator, now)?;
-        self.repo.commit(outcome).await?;
+        let decide: crate::ports::UpdateDecision =
+            Box::new(move |aggregate| transitions::approve_enrollment(&aggregate, operator, now));
+        self.repo.update_endpoint(endpoint_id, decide).await?;
         Ok(())
     }
 
@@ -175,13 +173,9 @@ impl<R: EndpointRepository> EnrollmentService<R> {
         endpoint_id: EndpointId,
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationError> {
-        let aggregate = self
-            .repo
-            .find_by_id(endpoint_id)
-            .await?
-            .ok_or(ApplicationError::EndpointNotFound(endpoint_id))?;
-        let outcome = transitions::revoke_credential(&aggregate, now);
-        self.repo.commit(outcome).await?;
+        let decide: crate::ports::UpdateDecision =
+            Box::new(move |aggregate| Ok(transitions::revoke_credential(&aggregate, now)));
+        self.repo.update_endpoint(endpoint_id, decide).await?;
         Ok(())
     }
 }
