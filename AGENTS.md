@@ -158,7 +158,7 @@ Primary locations:
 - `docs/specifications/`: persistent specifications when appropriate;
 - `docs/architecture/`: currently implemented architecture;
 - `docs/decisions/`: architectural decisions and ADR history;
-- `docs/development/`: engineering process;
+- `docs/development/`: engineering process, including persistence and schema-evolution conventions (`docs/development/persistence.md`);
 - `docs/reference/`: factual knowledge, compatibility notes, and technical reference material.
 
 Detailed documentation ownership belongs in `docs/development/documentation-policy.md` when that document exists.
