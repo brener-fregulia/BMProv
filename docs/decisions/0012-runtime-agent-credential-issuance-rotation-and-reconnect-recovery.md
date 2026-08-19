@@ -1,6 +1,6 @@
 # ADR-0012: Runtime Agent credential issuance, rotation, and reconnect recovery
 
-Status: Proposed
+Status: Accepted
 
 ## Context
 

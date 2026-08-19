@@ -40,8 +40,8 @@ Transitions:
 ### 2. Credential/session lifecycle (independent of identity lifecycle)
 
 - **NoActiveCredential** — no runtime credential currently issued (e.g., no runtime credential has yet been issued; a prior credential was explicitly removed and no replacement is active; or enrollment has not yet reached the point where a runtime credential exists). Being offline/disconnected is **not** an example of `NoActiveCredential` — current Agent presence (connectivity) and credential validity are independent facts (`docs/specifications/m0-administrative-api-web-read-contract.md` already establishes this for the `agent_presence` read representation): an Endpoint may hold a valid, unexpired `CredentialActive` credential while currently disconnected.
-- **CredentialActive** — a runtime Agent identity/session credential is currently valid.
-- **CredentialExpired** — the runtime credential's validity period has elapsed.
+- **CredentialActive** — at least one runtime credential in the Endpoint's current credential chain is currently valid.
+- **CredentialExpired** — no runtime credential in the current credential chain remains valid because the applicable validity periods have elapsed.
 - **CredentialRevoked** — the runtime credential was explicitly invalidated (operator action, or Server-driven revocation, e.g. as a consequence of a `Conflict` hardware-confidence state). Revocation invalidates every credential currently valid in the Endpoint's credential chain, not only the most recently issued one (see "Credential chain, rotation, and revocation" below).
 
 This dimension cycles repeatedly and independently across an Endpoint's lifetime (every reconnect, every renewal) and does not by itself change the Endpoint identity lifecycle state. The concrete authentication mechanism that establishes `CredentialActive` is owned by the Agent control-protocol Work Package (Issue #3); this Specification only defines the resulting state, not the mechanism.
