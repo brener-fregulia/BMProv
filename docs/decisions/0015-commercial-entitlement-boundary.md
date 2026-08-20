@@ -57,12 +57,19 @@ are explicitly deferred (see "Open questions").
 
 ### 1. Bamep is commercially agnostic
 
-The Bamep open-core repository must not contain commercial product/catalog
-concepts. In particular, Domain, Application, and Runtime Services code must
-never define or branch on concepts such as a product/edition identifier
-(e.g. "Bamep-4", "Bamep-8", "Bamep-Full"), `customer`, `customer_id`,
-`contract`, `subscription`, `invoice`, a billing plan, a SKU, or an ERP
-tenant. No enum equivalent to:
+Bamep's runtime architecture and product model must not encode or branch on
+commercial product/catalog vocabulary such as a product/edition identifier
+(e.g. "Bamep-4", "Bamep-8", "Bamep-Full"), `customer`, `contract`, a billing
+plan, or a SKU. This does not bar architecture documentation, this ADR
+itself, or the generic entitlement Adapter/Port boundary from discussing the
+commercial boundary conceptually — it constrains what the runtime
+architecture *encodes*, not what documentation may *describe*.
+
+The stronger invariant holds specifically for Domain, Application, and
+Runtime Services code: it must never define or branch on concepts such as a
+product/edition identifier, `customer`, `customer_id`, `contract`,
+`subscription`, `invoice`, a billing plan, a SKU, or an ERP tenant. No enum
+equivalent to:
 
 ```text
 enum Edition { Bamep4, Bamep8, Full }
@@ -147,10 +154,13 @@ it. Exact struct/type shapes are implementation-time, not decided here.
 Domain must contain zero commercial vocabulary. In particular, the
 Scheduler/Resource Arbiter must never do anything equivalent to
 `LicenseService::is_bamep_8()` or otherwise inspect a commercial edition. It
-may receive a generic `ExecutionCapacityPolicy` as one more resource/admission
-input, in the same category as the existing Attempt-scoped resource leases
-(`docs/specifications/m0-job-lifecycle-and-scheduling.md` "Other resource
-leases (Attempt-scoped)"). A future plugin runtime may receive/query a
+may receive a generic `ExecutionCapacityPolicy` as one additional Scheduler
+admission/resource-policy input, evaluated at Job admission /
+endpoint-exclusivity level and kept explicitly distinct from the existing
+Attempt-scoped resource leases (`docs/specifications/m0-job-lifecycle-and-scheduling.md`
+"Other resource leases (Attempt-scoped)") — see "Capacity composes with
+physical resource limits" below for how the two levels compose. A future
+plugin runtime may receive/query a
 generic `CapabilitySet` or `has_capability(CapabilityId)`. No component below
 the Application/commercial boundary needs to know *why* a capability or
 capacity value has the value it has.
