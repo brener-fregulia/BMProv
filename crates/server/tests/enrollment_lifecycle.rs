@@ -76,7 +76,10 @@ async fn endpoint_row_count(pool: &PgPool, inventory_signal: &str) -> i64 {
 }
 
 async fn identity_state(pool: &PgPool, endpoint_id: bamep_domain::EndpointId) -> String {
-    sqlx::query_scalar("SELECT identity_state FROM endpoints WHERE id = $1")
+    // `identity_state` is a native `endpoint_identity_state` PostgreSQL ENUM
+    // (migration 0002) — cast to `text` so this assertion helper can keep
+    // comparing against the plain textual label.
+    sqlx::query_scalar("SELECT identity_state::text FROM endpoints WHERE id = $1")
         .bind(endpoint_id.0)
         .fetch_one(pool)
         .await
@@ -104,6 +107,42 @@ async fn migrations_apply_cleanly_to_a_fresh_database() {
             "endpoint_credentials",
             "endpoints",
         ]
+    );
+
+    db.teardown().await;
+}
+
+/// Confirms migration `0002_closed_vocabulary_postgres_enums.sql` actually
+/// converted the three closed-vocabulary columns to their intended
+/// user-defined PostgreSQL ENUM types, not merely to some other non-`TEXT`
+/// representation.
+#[tokio::test]
+async fn closed_vocabulary_columns_use_native_postgres_enum_types() {
+    let db = TestDatabase::setup().await;
+
+    async fn udt_name(pool: &PgPool, table_name: &str, column_name: &str) -> String {
+        sqlx::query_scalar(
+            "SELECT udt_name FROM information_schema.columns \
+             WHERE table_name = $1 AND column_name = $2",
+        )
+        .bind(table_name)
+        .bind(column_name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    assert_eq!(
+        udt_name(&db.pool, "endpoints", "identity_state").await,
+        "endpoint_identity_state"
+    );
+    assert_eq!(
+        udt_name(&db.pool, "domain_events", "event_type").await,
+        "domain_event_type"
+    );
+    assert_eq!(
+        udt_name(&db.pool, "audit_records", "actor_kind").await,
+        "audit_actor_kind"
     );
 
     db.teardown().await;

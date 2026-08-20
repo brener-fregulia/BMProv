@@ -67,6 +67,31 @@ relational-first, JSONB selective".
 `JSONB` is reserved for genuinely variable payloads (for example an event's
 type-specific `payload`), not a shortcut for serializing whole aggregates.
 
+## Closed categorical values
+
+A durable column that holds a closed, low-cardinality vocabulary — a fixed
+set of state/type/kind labels that is part of the persistence/Domain
+contract (e.g. an identity-lifecycle state, a domain-event type, an actor
+kind) — should not default to repeated free-form `TEXT`.
+
+* Prefer a native PostgreSQL `ENUM` type when the vocabulary is
+  intentionally closed. It gives a compact fixed-size internal
+  representation (avoiding repeated textual labels in large tables/indexes),
+  keeps SQL human-readable, and lets PostgreSQL itself enforce the closed
+  set.
+* `TEXT` remains appropriate for open-ended values (free-form labels,
+  descriptive/error detail, arbitrary identifiers).
+* A numeric code (e.g. `SMALLINT`) requires a demonstrated storage/
+  performance need before use — it saves little over `ENUM` while losing
+  SQL readability and semantic clarity.
+* PostgreSQL `ENUM` evolution (adding/renaming/removing a label) is itself
+  schema evolution and goes through a versioned migration like any other
+  schema change — never an implicit/ad-hoc value.
+* SQLx/PostgreSQL enum representations (`#[derive(sqlx::Type)]`) stay
+  inside the PostgreSQL Adapter, mapped explicitly to/from the Domain type;
+  they must not leak into Domain, consistent with "Domain versus
+  persistence model" above.
+
 ## Query style
 
 The current baseline uses runtime-checked SQL:

@@ -33,22 +33,87 @@ fn to_backend_err(e: sqlx::Error) -> RepositoryError {
     RepositoryError::Backend(e.to_string())
 }
 
-fn identity_state_to_str(state: IdentityState) -> &'static str {
-    match state {
-        IdentityState::PendingEnrollment => "PendingEnrollment",
-        IdentityState::Enrolled => "Enrolled",
-        IdentityState::Retired => "Retired",
+/// Adapter-local representation of the `endpoint_identity_state` PostgreSQL
+/// ENUM (migration `0002_closed_vocabulary_postgres_enums.sql`). Domain
+/// (`bamep_domain::IdentityState`) stays free of SQLx/PostgreSQL derives —
+/// this type exists only to give SQLx a Postgres-typed value to bind/decode,
+/// mapped explicitly to/from Domain below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "endpoint_identity_state")]
+enum PgIdentityState {
+    PendingEnrollment,
+    Enrolled,
+    Retired,
+}
+
+impl From<IdentityState> for PgIdentityState {
+    fn from(state: IdentityState) -> Self {
+        match state {
+            IdentityState::PendingEnrollment => PgIdentityState::PendingEnrollment,
+            IdentityState::Enrolled => PgIdentityState::Enrolled,
+            IdentityState::Retired => PgIdentityState::Retired,
+        }
     }
 }
 
-fn identity_state_from_str(s: &str) -> Result<IdentityState, RepositoryError> {
-    match s {
-        "PendingEnrollment" => Ok(IdentityState::PendingEnrollment),
-        "Enrolled" => Ok(IdentityState::Enrolled),
-        "Retired" => Ok(IdentityState::Retired),
-        other => Err(RepositoryError::Backend(format!(
-            "unrecognized identity_state {other:?} in durable storage"
-        ))),
+impl From<PgIdentityState> for IdentityState {
+    fn from(state: PgIdentityState) -> Self {
+        match state {
+            PgIdentityState::PendingEnrollment => IdentityState::PendingEnrollment,
+            PgIdentityState::Enrolled => IdentityState::Enrolled,
+            PgIdentityState::Retired => IdentityState::Retired,
+        }
+    }
+}
+
+/// Adapter-local representation of the `domain_event_type` PostgreSQL ENUM.
+/// Only a write direction is needed today: nothing currently reads
+/// `domain_events.event_type` back into a Domain type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "domain_event_type")]
+enum PgDomainEventType {
+    EndpointPendingEnrollment,
+    EndpointEnrolled,
+    OperatorDecisionRecorded,
+}
+
+impl From<&DomainEvent> for PgDomainEventType {
+    fn from(event: &DomainEvent) -> Self {
+        match event {
+            DomainEvent::EndpointPendingEnrollment { .. } => {
+                PgDomainEventType::EndpointPendingEnrollment
+            }
+            DomainEvent::EndpointEnrolled { .. } => PgDomainEventType::EndpointEnrolled,
+            DomainEvent::OperatorDecisionRecorded { .. } => {
+                PgDomainEventType::OperatorDecisionRecorded
+            }
+        }
+    }
+}
+
+/// Adapter-local representation of the `audit_actor_kind` PostgreSQL ENUM.
+/// Only a write direction is needed today: nothing currently reads
+/// `audit_records.actor_kind` back into a Domain type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "audit_actor_kind", rename_all = "lowercase")]
+enum PgAuditActorKind {
+    Operator,
+    System,
+}
+
+impl From<&Actor> for PgAuditActorKind {
+    fn from(actor: &Actor) -> Self {
+        match actor {
+            Actor::Operator { .. } => PgAuditActorKind::Operator,
+            Actor::System => PgAuditActorKind::System,
+        }
+    }
+}
+
+fn actor_label(actor: &Actor) -> Option<&str> {
+    match actor {
+        Actor::Operator { label } => Some(label.as_str()),
+        Actor::System => None,
     }
 }
 
@@ -62,9 +127,12 @@ fn verifier_from_bytes(bytes: Vec<u8>) -> Result<CredentialHash, RepositoryError
     Ok(CredentialHash::from_bytes(array))
 }
 
+/// Text representation used only for the JSONB event payload
+/// (`event_payload` below) — unrelated to the `audit_actor_kind` PostgreSQL
+/// ENUM, which governs the `audit_records.actor_kind` column instead.
 fn actor_columns(actor: &Actor) -> (&'static str, Option<&str>) {
     match actor {
-        Actor::Operator { label } => ("operator", Some(label.as_str())),
+        Actor::Operator { .. } => ("operator", actor_label(actor)),
         Actor::System => ("system", None),
     }
 }
@@ -94,7 +162,7 @@ fn event_payload(event: &DomainEvent) -> serde_json::Value {
 fn row_to_aggregate(row: &sqlx::postgres::PgRow) -> Result<EndpointAggregate, RepositoryError> {
     let id: uuid::Uuid = row.try_get("id").map_err(to_backend_err)?;
     let inventory_signal: String = row.try_get("inventory_signal").map_err(to_backend_err)?;
-    let identity_state: String = row.try_get("identity_state").map_err(to_backend_err)?;
+    let identity_state: PgIdentityState = row.try_get("identity_state").map_err(to_backend_err)?;
     let created_at = row.try_get("created_at").map_err(to_backend_err)?;
     let updated_at = row.try_get("updated_at").map_err(to_backend_err)?;
 
@@ -128,7 +196,7 @@ fn row_to_aggregate(row: &sqlx::postgres::PgRow) -> Result<EndpointAggregate, Re
     Ok(EndpointAggregate {
         id: EndpointId(id),
         inventory_signal,
-        identity: identity_state_from_str(&identity_state)?,
+        identity: identity_state.into(),
         credential: CredentialChain::from_parts(predecessor, successor, revoked),
         created_at,
         updated_at,
@@ -200,7 +268,7 @@ async fn persist_transition(
     )
     .bind(endpoint.id.0)
     .bind(&endpoint.inventory_signal)
-    .bind(identity_state_to_str(endpoint.identity))
+    .bind(PgIdentityState::from(endpoint.identity))
     .bind(endpoint.created_at)
     .bind(endpoint.updated_at)
     .execute(&mut **tx)
@@ -247,7 +315,7 @@ async fn persist_transition(
             "#,
         )
         .bind(event.event_id())
-        .bind(event.event_type())
+        .bind(PgDomainEventType::from(event))
         .bind(1i32)
         .bind(event.endpoint_id().0)
         .bind(event.occurred_at())
@@ -258,7 +326,6 @@ async fn persist_transition(
     }
 
     if let Some(audit) = &outcome.audit {
-        let (actor_kind, actor_label) = actor_columns(&audit.actor);
         sqlx::query(
             r#"
             INSERT INTO audit_records (audit_id, endpoint_id, actor_kind, actor_label, occurred_at, detail)
@@ -267,8 +334,8 @@ async fn persist_transition(
         )
         .bind(audit.audit_id)
         .bind(audit.endpoint_id.0)
-        .bind(actor_kind)
-        .bind(actor_label)
+        .bind(PgAuditActorKind::from(&audit.actor))
+        .bind(actor_label(&audit.actor))
         .bind(audit.occurred_at)
         .bind(&audit.detail)
         .execute(&mut **tx)
