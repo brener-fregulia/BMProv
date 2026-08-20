@@ -12,6 +12,7 @@ pub mod credential;
 pub mod endpoint;
 pub mod events;
 pub mod identity;
+pub mod presented_credential;
 pub mod transitions;
 
 pub use credential::{
