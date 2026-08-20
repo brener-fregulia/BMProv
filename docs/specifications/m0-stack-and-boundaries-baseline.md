@@ -25,6 +25,8 @@ Bamep V1:
 
 Bamep is not an ERP, CRM, financial system, general-purpose RMM, NAS, general switch manager, or V1 multi-site platform. A future ERP must integrate through a public/versioned API and domain events, never through Bamep's internal database.
 
+Bamep is also commercially agnostic: commercial product/catalog concepts (customer, contract, subscription, SKU, edition) are outside Bamep's Domain vocabulary. Commercial entitlement verification, when a commercial installation configures it, is a Port/Adapter/Application-level concern only — Domain never gains commercial concepts (ADR-0015).
+
 (Source: `docs/discovery/architecture-redesign.md`, "Product boundary" — already accepted.)
 
 ## Component responsibilities and boundaries
@@ -95,6 +97,7 @@ Already-accepted direction, persisted here:
 - ADR-0003 — Worker and Agent implementation language strategy: Rust for both, with contracts kept explicit and independently versioned (`Accepted`).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`) — source of the "Trusted bootstrap baseline" consequence recorded above; does not select a network-boot mechanism.
 - ADR-0013 — PostgreSQL persistence backend baseline (`Accepted`) — current persistence-backend decision; source of the "does not require ... PostgreSQL" removal above and the PostgreSQL/SQLx Domain-isolation wording in "Component responsibilities and boundaries".
+- ADR-0015 — Commercial entitlement boundary: capacity policy, capabilities, offline verification, and plugin gating (`Accepted`) — records that Bamep remains commercially/ERP agnostic, that commercial entitlement verification is a Port/Adapter/Application concern, and that Domain does not gain commercial vocabulary; cross-reference only, does not change the product boundary or component boundaries recorded above.
 
 ## Related work
 

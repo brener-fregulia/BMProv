@@ -155,6 +155,8 @@ Checked once per Job, at `Pending` → `Running`:
 
 Distinct from, and prior to, the per-Attempt "Workflow/scheduler authorization" and "Destructive dispatch preconditions" above, which are evaluated at every dispatch throughout the Job's active lifetime, not just at admission.
 
+**Post-M0 clarification (ADR-0015).** Admission may additionally be gated by a generic effective capacity policy (e.g., a maximum number of simultaneously active Job-scoped endpoint-exclusivity leases) supplied to the Scheduler/Resource Arbiter from Application level. This is not a commercial concept in Domain — the Scheduler receives only a generic numeric/technical policy value, never a commercial edition or license state. The endpoint-exclusivity lease defined above remains the technical unit this policy constrains; a Job blocked only by this policy remains `Pending` like any other lease-contention case, composing with the existing scheduler/lease queue semantics rather than introducing a new Job failure mode. Full scheduler admission-algorithm design remains future work (see "Out of scope"). Active (`Running`/`Cancelling`) Jobs are never terminated because this policy changes (ADR-0015 "Failure semantics").
+
 ## Out of scope
 
 - partial-failure/skip semantics for Jobs — not decided, a future Specification if a concrete requirement emerges;
@@ -200,6 +202,7 @@ Manual: owner approval of this Specification — confirmed (see Status).
 - ADR-0005 — Agent control-plane protocol and typed-action model (Agent-action states, retry mechanism, `StatusQuery`).
 - ADR-0007 — Persistence backend and durable/transient boundary (`Accepted`; persist-before-send dispatch ordering `Dispatched` relies on).
 - ADR-0010 — Trusted bootstrap and Secure Boot baseline (`Accepted`; source of destructive dispatch precondition 7).
+- ADR-0015 — Commercial entitlement boundary: capacity policy, capabilities, offline verification, and plugin gating (`Accepted`; source of the "Post-M0 clarification" in "Job admission" above — the generic `ExecutionCapacityPolicy` admission input and its failure semantics; does not change Job/JobStep/Attempt states or the endpoint-exclusivity lease).
 
 ## Related work
 
