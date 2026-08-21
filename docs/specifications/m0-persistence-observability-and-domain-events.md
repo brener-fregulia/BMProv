@@ -10,10 +10,18 @@ This Specification details the durable/transient persistence boundary originally
 
 Restates and applies the durable/transient boundary ADR-0007 established and ADR-0013 carries forward unchanged (see those ADRs for full reasoning):
 
-- **Durable** (written to the PostgreSQL-backed domain database, on state *transition*, not on observation): Job/JobStep/Attempt state transitions; Endpoint identity/credential/hardware-confidence state transitions; inventory on revision change only; Artifact/Snapshot metadata on lifecycle transition; domain events; audit records for safety-relevant operator decisions.
+- **Durable** (written to the PostgreSQL-backed domain database, on state *transition*, not on observation): Job/JobStep/Attempt state transitions; Endpoint identity/credential/hardware-confidence state transitions; the Endpoint authoritative current-boot projection and its trusted-bootstrap state; inventory on revision change only; Artifact/Snapshot metadata on lifecycle transition; domain events; audit records for safety-relevant operator decisions.
 - **Transient/high-frequency** (not one durable write per message/sample): Agent connection/presence state; `ActionProgress` ticks (latest-value only); general logs; high-frequency telemetry/metrics.
 
 Any future Work Package or implementation that persists new state must classify it against this boundary explicitly rather than defaulting to "durable."
+
+The Endpoint current-boot projection (`boot_context_id`, 32-byte `boot_nonce`,
+`TrustedBootstrapState`) is durable because it defines which boot is authoritative
+across Server restart/reconnect and supplies destructive-operation precondition 7. It
+is not Agent presence, WebSocket-session state, or high-frequency observation.
+Pre-existing data for which no authenticated current boot can be reconstructed remains
+current-boot-absent plus `NotEstablished`; no historical nonce is fabricated and no
+compatibility path treats such rows as trusted.
 
 **This boundary is an architectural expectation, not yet an empirically validated result** (originally ADR-0007; carried forward unchanged by ADR-0013). It bounds write volume to the number of domain-state transitions rather than message/sample count, but it does not make database load independent of endpoint count — more concurrent endpoints still produce more transitions. Whether the resulting load is comfortable for the adopted persistence backend (PostgreSQL, ADR-0013) at the M0 20–24 endpoint target is measured empirically by the post-M0 first implementation vertical slice, running the persistence-load scenario Issue #7's Specification defines (see "Validation expectations"). This measurement is not itself part of the M0 architecture/contract baseline — no implementation exists during M0 to run it against.
 
@@ -74,6 +82,37 @@ Per ADR-0013 (originally established by ADR-0007): when a durable domain transit
 For an Agent-executed Attempt specifically, this transaction commits **before** the Server attempts to transmit `ActionDispatch` to the Agent — a database transaction and a WebSocket send cannot be atomic with each other, so persistence always comes first, an invariant ADR-0013 carries forward directly (point 16). The exact ordering, and how a crash around the send boundary is handled (via the existing `Dispatched` → `AwaitingReconciliation` path, `docs/decisions/0006-job-jobstep-attempt-state-model-and-scheduling.md`), is defined in ADR-0007 "Crash-safe dispatch persistence ordering" (historical origin, preserved unedited; the requirement itself is authoritative through ADR-0013); this Specification does not duplicate that detail.
 
 **This is not event sourcing.** Current durable domain state remains the source of truth. The domain event describing a transition is persisted in the **same atomic transaction** as that transition — it becomes durable and visible only if that transaction commits; it is not a second, post-commit database write, and there is no window where the transition is committed but its event is not (or vice versa). Domain events are not a log Bamep replays to reconstruct state. External publication/delivery semantics for future integrations are outside this Work Package.
+
+For WP1 first contact, Endpoint `PendingEnrollment`, credential chain/lookup
+projection, `BootContext` resolution, current-boot selection/current nonce,
+`TrustedBootstrapState::NotEstablished`, and the existing required
+`EndpointPendingEnrollment` event commit atomically before `SessionEstablished`.
+For genuine reboot, preserved identity, replacement credential chain/lookup
+projection, new `BootContext` resolution/current selection/current nonce, and reset to
+`NotEstablished` commit atomically before `SessionEstablished`. Same-boot credential
+reconnect/rotation preserves current-boot state; rejected credential mutates none of
+it.
+
+Valid independently verified `BootstrapEvidence` may promote only the exact
+authoritative current boot to `Established`. The authorization is checked under the
+Endpoint persistence lock immediately before mutation. Evidence processing does not
+lock `BootContext` after Endpoint; this preserves credential redemption's established
+`BootContext -> ... -> Endpoint` ordering and prevents old-boot evidence from racing a
+genuine reboot into restoring historical state.
+
+### WP1 trusted-bootstrap event and audit decision
+
+For WP1, `TrustedBootstrapState` changes are durable security/domain state but do not
+emit `TrustedBootstrapEstablished` or `TrustedBootstrapRejected` domain events and do
+not create immutable audit records for evidence acceptance or rejection. This is an
+explicit scope decision, not an implication that every durable field change always
+requires a new event: the catalog above is illustrative/extensible, while current
+audit requirements cover safety-relevant operator decisions and destructive dispatch/
+outcome. Evidence acceptance is neither.
+
+Existing first-contact/enrollment events and enrollment-approval audit requirements
+remain unchanged. A future Work Package may add a trusted-bootstrap event only for a
+concrete product/integration requirement through an explicit contract update.
 
 ## Inventory persistence boundary
 

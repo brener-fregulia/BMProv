@@ -17,7 +17,14 @@ Operator-approval-gated first enrollment is the accepted M0 default (ADR-0004): 
 
 An Endpoint's trust and operational readiness are governed by **three independent, Endpoint-owned state dimensions**, not one mutually exclusive machine. An earlier draft of this Specification collapsed persistent identity, credential/session validity, and hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal` state alongside `CredentialActive`); that conflated concerns that legitimately coexist — an `Enrolled` Endpoint can simultaneously have an expired credential and lowered hardware confidence, and forcing that into one mutually exclusive machine would make the combination unrepresentable or misleading. The three dimensions below may combine freely.
 
-These three dimensions are all facts *about the Endpoint identity record itself*. **`trusted bootstrap established`** (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`; destructive-operation precondition 7 below) is a different kind of fact — a security property of the **current boot/session context**, not a fourth Endpoint identity-lifecycle dimension, and it is not modeled or represented here as one. Its concrete representation/state machine is owned by the now-Approved trusted-bootstrap contract, `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13) — which in turn consumes ADR-0011 only for how the site trust-anchor is legitimately established, not for the representation/state machine itself — not by this Specification's three-dimension model.
+These three dimensions are facts *about the Endpoint identity record itself*.
+`trusted bootstrap established` (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`;
+destructive-operation precondition 7 below) remains a different kind of fact — a
+security property of the Endpoint's **current boot context**, not an identity-
+lifecycle state. It is nevertheless represented as a fourth independent durable
+Endpoint aggregate dimension through the authoritative current-boot projection
+defined below. Identity/enrollment, credential, hardware confidence, and current-boot
+trusted-bootstrap state must never be inferred from one another.
 
 ### 1. Endpoint identity lifecycle (persistent record)
 
@@ -57,7 +64,7 @@ genuine reboot:  E2 (new enrollment credential) → fresh runtime credential →
 
 A runtime credential does not need to survive a genuine Agent reboot — a new boot always obtains a new enrollment credential from the Boot Orchestrator and restarts this chain from `E`; Endpoint identity continuity across reboot is carried by the identity-lifecycle dimension above (`Enrolled`, matched by inventory signals), never by credential persistence across boots.
 
-**Credential lookup and boot-context correlation (ADR-0014).** A runtime credential is self-locating: it carries a non-secret lookup identifier alongside its secret material. The lookup identifier is indexed by PostgreSQL and narrows a presented `AuthRequest{credential}` to a candidate persisted Endpoint credential chain; it never authenticates by itself — the presented secret is still verified against that chain's stored one-way verifier/hash (see "Durable representation" below). An unresolved boot-scoped enrollment credential (E1/E2) is the same kind of self-locating value, backed by a separate durable record rather than the persisted credential chain: before its first successful redemption, its lookup identifier (`boot_context_id`, distinct from the trusted-bootstrap `boot_nonce`, `m0-trusted-bootstrap-and-server-fingerprint-contract.md`) resolves through a short-lived, PostgreSQL-persisted `BootContext` holding a one-way verifier of the enrollment secret, `expires_at`, Server/Boot-Orchestration-observed correlation evidence, and, once resolved, `resolved_endpoint_id`. No installation-global enrollment signing key is required. On first successful redemption, the presented enrollment credential is promoted into the Endpoint's normal credential chain as its predecessor, atomically with `BootContext.resolved_endpoint_id` and the normal persisted predecessor lookup mapping. After that commit, `BootContext` is no longer required — retries route through the normal persisted credential index like any other reconnect. `BootContext.expires_at` governs only the unresolved credential's first successful redemption; once promoted, the predecessor's validity is governed by its persisted `CredentialSlot` expiry/grace like any other chain entry, and may therefore remain valid beyond the original `BootContext` expiry — intentional, since predecessor retention exists to recover a lost `SessionEstablished`, and retaining the shorter enrollment expiry after promotion could strand an Agent during its first exchange. Full reasoning, the `BootContext` concurrency invariant, and rejected alternatives: ADR-0014.
+**Credential lookup and boot-context correlation (ADR-0014).** A runtime credential is self-locating: it carries a non-secret lookup identifier alongside its secret material. The lookup identifier is indexed by PostgreSQL and narrows a presented `AuthRequest{credential}` to a candidate persisted Endpoint credential chain; it never authenticates by itself — the presented secret is still verified against that chain's stored one-way verifier/hash (see "Durable representation" below). An unresolved boot-scoped enrollment credential (E1/E2) is the same kind of self-locating value, backed by a separate durable record rather than the persisted credential chain: before its first successful redemption, its lookup identifier (`boot_context_id`, distinct from the trusted-bootstrap `boot_nonce`, `m0-trusted-bootstrap-and-server-fingerprint-contract.md`) resolves through a short-lived, PostgreSQL-persisted `BootContext` holding a one-way verifier of the enrollment secret, `expires_at`, Server/Boot-Orchestration-observed correlation evidence, its 32-byte `boot_nonce`, and, once resolved, `resolved_endpoint_id`. The trusted-bootstrap/boot boundary supplies that nonce to Boot Orchestration at issuance; adding it does not make inventory evidence authentication or change lookup/redemption rules. No installation-global enrollment signing key is required. On first successful redemption, the presented enrollment credential is promoted into the Endpoint's normal credential chain as its predecessor, atomically with `BootContext.resolved_endpoint_id`, the normal persisted predecessor lookup mapping, and selection of this `BootContext`/nonce as the Endpoint's authoritative current boot. After that commit, `BootContext` is no longer required for credential retries — they route through the normal persisted credential index like any other reconnect — but it remains a durable historical boot record. `BootContext.expires_at` governs only the unresolved credential's first successful redemption; once promoted, the predecessor's validity is governed by its persisted `CredentialSlot` expiry/grace like any other chain entry, and may therefore remain valid beyond the original `BootContext` expiry — intentional, since predecessor retention exists to recover a lost `SessionEstablished`, and retaining the shorter enrollment expiry after promotion could strand an Agent during its first exchange. Full reasoning, the `BootContext` concurrency invariant, and rejected alternatives: ADR-0014.
 
 **Bounded valid set.** For one credential chain, the durable valid set never exceeds: one predecessor within its grace/expiry bound, plus at most one current unconfirmed successor. No unbounded accumulation of valid credentials is permitted.
 
@@ -85,6 +92,51 @@ Full reasoning and rejected alternatives: ADR-0012.
 
 This dimension can change at any time based on newly observed inventory signals, independent of the other two dimensions. It is resolved back to `Consistent` only through explicit operator review/confirmation or explicit revalidation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict`, and the exact mechanics of "explicit revalidation," are implementation-time policy, intentionally not decided here (see "Open questions").
 
+### 4. Authoritative current-boot trusted-bootstrap state
+
+The Endpoint owns one authoritative current-boot projection:
+
+```text
+CurrentBoot {
+    boot_context_id,
+    boot_nonce,
+    trusted_bootstrap: NotEstablished | Established
+}
+```
+
+It may be absent only when legacy/unknown data cannot establish an authenticated
+current boot. Absence means no trusted current boot is known and fails closed.
+Historical `BootContext` records remain historical; resolving any context to the same
+Endpoint does not make it current.
+
+- **First contact:** atomically selects the redeemed `BootContext`/nonce and initializes
+  `NotEstablished` before `SessionEstablished`.
+- **Genuine reboot:** atomically replaces the current context/nonce with the new
+  redeemed `BootContext` and resets `NotEstablished` before `SessionEstablished`.
+- **Same-boot runtime reconnect or credential rotation:** preserves the complete
+  current-boot projection and trusted-bootstrap state.
+- **Valid independently Server-verified evidence for the exact current boot:**
+  `NotEstablished -> Established`.
+- **Repeated valid evidence for that same current boot:** idempotently remains
+  `Established`.
+- **Rejected evidence or evidence for a historical/non-current boot:** no mutation.
+
+This state is durable PostgreSQL domain state, not an open-WebSocket/session or Agent-
+presence fact. A Server restart and same-boot reconnect preserve it; same-boot
+reconnect need not re-present evidence, though it may do so and be re-verified
+idempotently.
+
+Old-boot replay is always checked against this authoritative projection. If boot
+A/nonce A was Established and genuine reboot B/nonce B becomes current and
+NotEstablished, a correctly signed evidence A remains historical and cannot establish
+B. Only evidence matching B may do so.
+
+Evidence acceptance serializes under the current Endpoint lock and rechecks the exact
+current `boot_context_id`/`boot_nonce` immediately before mutation. It does not acquire
+a `BootContext` lock after the Endpoint lock: credential redemption already orders
+`BootContext` before Endpoint, and the projection deliberately carries sufficient
+immutable correlation data to avoid the reverse locking dependency.
+
 ## Future capability: pre-authorized enrollment (not an identity-lifecycle state)
 
 An operator may, in a future capability not required for M0, explicitly authorize an enrollment context/token before a specific endpoint's first connection. This is an **enrollment-authorization mechanism**, conceptually separate from and prior to the Endpoint identity lifecycle — it is not a state an Endpoint identity occupies.
@@ -105,7 +157,7 @@ Before any destructive operation executes against an Endpoint, **all** of the fo
 4. **Sufficiently fresh inventory** — the inventory revision the operation was authorized against matches the Endpoint's current inventory revision.
 5. **Target disk identity/fingerprint revalidation** — the target disk/volume identity/fingerprint matches what the operation was authorized against, revalidated immediately before execution.
 6. **Hardware confidence is sufficiently trusted** — the confidence dimension is `Consistent`. Both `LoweredConfidence` and `Conflict` block destructive execution until the confidence issue has been resolved through explicit operator review or revalidation; for this precondition the two levels are not treated differently, even though they differ for reconnect, renewal, and non-destructive activity (see "Hardware/identity-confidence state" and "Reconnect / credential renewal handling" above).
-7. **Trusted current bootstrap context** — the current Agent boot/session must be anchored in a bootstrap context whose integrity/authenticity has been established, per `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`'s `trusted bootstrap established` security property (Secure Boot is the V1 baseline mechanism for the executable boot-chain integrity that property depends on). This is independent of precondition 2: a valid, active Agent credential proves the Agent authenticated successfully over the current session — it does not prove that the boot path leading to this session was itself trusted, since credential issuance and boot-chain trust are established by different mechanisms at different times. This Specification does not name this precondition `SecureBootEnabled`, does not require Domain code to inspect firmware state, and does not define the concrete representation/state machine for the trusted-bootstrap fact — that belongs to `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13, `Approved`), consistent with ADR-0010 "Related work"; ADR-0011 is that contract's decision record for site trust-anchor establishment specifically, not for the representation/state machine itself; this precondition only establishes that the fact must exist and must gate destructive execution.
+7. **Trusted current bootstrap context** — the authoritative current-boot projection defined above must exist and its `TrustedBootstrapState` must be `Established`, following independent Server verification under `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`. The current Agent boot/session must be anchored in a bootstrap context whose integrity/authenticity has been established, per `docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md` (Secure Boot is the V1 baseline mechanism for the executable-chain integrity that property depends on). This is independent of precondition 2: a valid, active Agent credential proves authentication but not that the boot path was trusted. The Domain fact remains mechanism-neutral — it is not named `SecureBootEnabled` and contains no firmware, shim, GRUB, or signature-library state.
 
 Any of these failing must block the destructive operation and surface a clear reason — never a silent retry or silent override. This seven-item precondition set is normative for Issues #4 and #6, which reference it directly rather than re-deriving or narrowing it to a single check. **Precondition 7 was added by ADR-0010** and is already fully composed: `docs/specifications/m0-job-lifecycle-and-scheduling.md` "Destructive dispatch preconditions" lists and revalidates all seven preconditions before destructive dispatch, and `docs/specifications/m0-data-plane-and-storage-contracts.md` treats its Artifact-specific gates as additive to this complete set, including precondition 7, without duplicating it. No follow-up amendment for this alignment remains open.
 
@@ -130,7 +182,9 @@ Owner decision: once an Endpoint has been explicitly enrolled, normal reconnects
 
 ## Acceptance criteria
 
-- Endpoint identity lifecycle, credential/session lifecycle, and hardware-confidence state are defined as independent dimensions, satisfying Issue #2's acceptance criterion for "a Specification defining the identity lifecycle" and correcting the earlier single-state-machine conflation identified during owner review.
+- Endpoint identity lifecycle, credential/session lifecycle, hardware-confidence state,
+  and authoritative current-boot trusted-bootstrap state are independent aggregate
+  dimensions. The current-boot dimension is not itself an identity-lifecycle state.
 - The Endpoint identity lifecycle contains exactly four states (`(no record)`, `PendingEnrollment`, `Enrolled`, `Retired`); pre-authorized enrollment is modeled as a separate future enrollment-authorization mechanism, not a fifth identity state.
 - Destructive-operation authorization preconditions are independent, explicit, and not collapsed into a single `Enrolled` check; both `LoweredConfidence` and `Conflict` block destructive execution; trusted-bootstrap context (precondition 7) is independent of credential validity — a valid Agent credential does not prove the current boot path was itself trusted.
 - Reconnect/credential-renewal behavior matches the owner's continuity decision (no repeated approval when continuity holds, and `LoweredConfidence` alone does not interrupt continuity even though it blocks destructive execution).
@@ -160,7 +214,10 @@ Manual: owner approval of this Specification and ADR-0004 — both confirmed (se
 
 ## Open questions
 
-The concrete representation/state machine for the trusted-bootstrap fact (precondition 7) is no longer tracked as open here: it is owned by `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md` (Issue #13, `Approved`), which in turn consumes ADR-0011 for the V1 site trust-anchor establishment decision specifically.
+The concrete current-boot representation and its local/Server verification contract
+are defined above and in
+`docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`; they
+are no longer open. ADR-0011 continues to own only V1 site trust-anchor establishment.
 
 1. Exact thresholds distinguishing `LoweredConfidence` from `Conflict`, whether escalation between them can ever be automatic, and the exact mechanics of "explicit revalidation" — implementation-time policy, not an M0 architectural blocker.
 2. Exact numeric grace/expiry duration for the credential chain (ADR-0012) — implementation-time detail; the chain/rotation/replacement mechanism itself is no longer open (see "Credential chain, rotation, and revocation").
