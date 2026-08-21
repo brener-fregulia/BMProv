@@ -126,9 +126,14 @@ async fn pin_mismatch_fails_closed_before_websocket_and_auth_request() {
         "a fingerprint mismatch must fail the TLS handshake, never yield a WebSocket stream"
     );
 
-    // Give the server task a bounded chance to observe the aborted
-    // connection attempt before asserting the negative outcome.
-    let _ = tokio::time::timeout(Duration::from_millis(500), server_task).await;
+    // The Server task must actually finish observing the aborted TLS
+    // handshake within a bounded deadline — a still-blocked Server task is
+    // never an acceptable passing outcome, so its timeout result and its
+    // own join result are both asserted, not merely awaited-and-ignored.
+    tokio::time::timeout(Duration::from_secs(5), server_task)
+        .await
+        .expect("Server must observe the aborted TLS handshake within the deadline")
+        .expect("Server task must not panic");
 
     assert!(
         !tls_and_websocket_established.load(Ordering::SeqCst),
