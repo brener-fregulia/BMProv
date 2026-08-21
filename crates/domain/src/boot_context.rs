@@ -39,6 +39,15 @@ pub struct BootContext {
     resolved_endpoint_id: Option<EndpointId>,
 }
 
+/// A [`BootContext::resolve`] call that would replace an existing
+/// resolution with a different Endpoint. `existing` is safe to expose:
+/// [`EndpointId`] is a Server-assigned identifier, never secret material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("boot context already resolved to a different endpoint: {existing:?}")]
+pub struct BootContextResolveError {
+    pub existing: EndpointId,
+}
+
 impl BootContext {
     /// Constructs a fresh, unresolved `BootContext` at issuance time. The
     /// caller derives `verifier` beforehand (e.g. via
@@ -113,6 +122,26 @@ impl BootContext {
 
     pub fn resolved_endpoint_id(&self) -> Option<EndpointId> {
         self.resolved_endpoint_id
+    }
+
+    /// Resolves this BootContext to the Endpoint its first successful
+    /// redemption produced (ADR-0014 point 8). Idempotent when resolving
+    /// again to the same Endpoint; rejects resolving to a different Endpoint
+    /// rather than silently replacing the existing resolution — a resolved
+    /// BootContext's Endpoint is final. Returns new state rather than
+    /// mutating in place, like every other Domain transition: the caller (a
+    /// future redemption-transaction Adapter) persists the result under its
+    /// own lock, and this method performs no locking or persistence of its
+    /// own.
+    pub fn resolve(&self, endpoint_id: EndpointId) -> Result<Self, BootContextResolveError> {
+        match self.resolved_endpoint_id {
+            None => Ok(Self {
+                resolved_endpoint_id: Some(endpoint_id),
+                ..self.clone()
+            }),
+            Some(existing) if existing == endpoint_id => Ok(self.clone()),
+            Some(existing) => Err(BootContextResolveError { existing }),
+        }
     }
 
     /// Whether this BootContext may still admit its first successful
@@ -255,5 +284,88 @@ mod tests {
             Some(endpoint_id),
         );
         assert_eq!(context.resolved_endpoint_id(), Some(endpoint_id));
+    }
+
+    #[test]
+    fn unresolved_context_resolves_to_the_supplied_endpoint() {
+        let secret = PresentedCredentialSecret::generate();
+        let context = fresh_context(&secret, Duration::minutes(5));
+        let endpoint_id = EndpointId::new();
+
+        let resolved = context
+            .resolve(endpoint_id)
+            .expect("first resolution succeeds");
+
+        assert_eq!(resolved.resolved_endpoint_id(), Some(endpoint_id));
+    }
+
+    #[test]
+    fn resolving_preserves_every_other_field() {
+        let secret = PresentedCredentialSecret::generate();
+        let context = fresh_context(&secret, Duration::minutes(5));
+        let endpoint_id = EndpointId::new();
+
+        let resolved = context
+            .resolve(endpoint_id)
+            .expect("first resolution succeeds");
+
+        assert_eq!(resolved.boot_context_id(), context.boot_context_id());
+        assert_eq!(resolved.verifier(), context.verifier());
+        assert_eq!(resolved.issued_at(), context.issued_at());
+        assert_eq!(resolved.expires_at(), context.expires_at());
+        assert_eq!(resolved.inventory_signal(), context.inventory_signal());
+    }
+
+    #[test]
+    fn resolving_to_the_same_endpoint_again_is_idempotent() {
+        let secret = PresentedCredentialSecret::generate();
+        let context = fresh_context(&secret, Duration::minutes(5));
+        let endpoint_id = EndpointId::new();
+
+        let once = context
+            .resolve(endpoint_id)
+            .expect("first resolution succeeds");
+        let twice = once
+            .resolve(endpoint_id)
+            .expect("repeat resolution to the same endpoint succeeds");
+
+        assert_eq!(twice, once);
+    }
+
+    #[test]
+    fn resolving_an_already_resolved_context_to_a_different_endpoint_is_rejected() {
+        let secret = PresentedCredentialSecret::generate();
+        let context = fresh_context(&secret, Duration::minutes(5));
+        let first_endpoint_id = EndpointId::new();
+        let other_endpoint_id = EndpointId::new();
+
+        let resolved = context
+            .resolve(first_endpoint_id)
+            .expect("first resolution succeeds");
+        let conflict = resolved.resolve(other_endpoint_id);
+
+        assert_eq!(
+            conflict,
+            Err(BootContextResolveError {
+                existing: first_endpoint_id
+            })
+        );
+    }
+
+    #[test]
+    fn a_rejected_conflicting_resolution_does_not_replace_the_existing_resolution() {
+        let secret = PresentedCredentialSecret::generate();
+        let context = fresh_context(&secret, Duration::minutes(5));
+        let first_endpoint_id = EndpointId::new();
+        let other_endpoint_id = EndpointId::new();
+
+        let resolved = context
+            .resolve(first_endpoint_id)
+            .expect("first resolution succeeds");
+        let _ = resolved.resolve(other_endpoint_id);
+
+        // The rejected call returned a Result, never mutating `resolved` in
+        // place — its own resolution must still be the first Endpoint.
+        assert_eq!(resolved.resolved_endpoint_id(), Some(first_endpoint_id));
     }
 }

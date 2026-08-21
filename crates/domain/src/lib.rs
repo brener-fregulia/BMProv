@@ -16,7 +16,7 @@ pub mod identity;
 pub mod presented_credential;
 pub mod transitions;
 
-pub use boot_context::BootContext;
+pub use boot_context::{BootContext, BootContextResolveError};
 pub use credential::{
     AuthOutcome, CredentialChain, CredentialDimension, CredentialSecret, DEFAULT_CREDENTIAL_TTL,
 };
