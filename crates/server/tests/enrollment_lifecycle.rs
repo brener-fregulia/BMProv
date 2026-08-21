@@ -31,8 +31,9 @@ mod support;
 
 use std::sync::Arc;
 
+use bamep_domain::credential::CredentialHash;
 use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
-use bamep_domain::{Actor, EndpointId};
+use bamep_domain::{Actor, BootNonce, EndpointId, TrustedBootstrapState};
 use bamep_server::adapters::postgres::{
     PostgresBootContextRepository, PostgresCredentialRedemptionRepository,
     PostgresEndpointRepository,
@@ -66,14 +67,28 @@ fn build_services(pool: PgPool) -> (BootOrchestration, Enrollment, Arc<ManualClo
 
 /// Issues a real ADR-0014 boot-scoped enrollment credential through
 /// `BootOrchestrationService` — the same path Boot Orchestration itself
-/// exercises end to end.
+/// exercises end to end. Generates a fresh, discarded `BootNonce`: most
+/// tests in this file don't need to assert on the exact nonce value — see
+/// [`issue_e1_with_nonce`] for the ones (current-boot assertions) that do.
 async fn issue_e1(
     boot_orchestration: &BootOrchestration,
     inventory_signal: &str,
     now: chrono::DateTime<Utc>,
 ) -> PresentedCredential {
+    let boot_nonce = BootNonce::generate().expect("OS CSPRNG must be available in tests");
+    issue_e1_with_nonce(boot_orchestration, inventory_signal, boot_nonce, now).await
+}
+
+/// Same as [`issue_e1`], but with caller-controlled `boot_nonce` — for tests
+/// that assert on the exact persisted current-boot nonce.
+async fn issue_e1_with_nonce(
+    boot_orchestration: &BootOrchestration,
+    inventory_signal: &str,
+    boot_nonce: BootNonce,
+    now: chrono::DateTime<Utc>,
+) -> PresentedCredential {
     boot_orchestration
-        .issue_enrollment_credential(inventory_signal, now)
+        .issue_enrollment_credential(inventory_signal, boot_nonce, now)
         .await
         .expect("issuance must succeed")
 }
@@ -154,6 +169,31 @@ async fn boot_context_resolved_endpoint(pool: &PgPool, boot_context_id: &[u8]) -
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+/// Test-only setup, NOT a production transition: Server-side `BootstrapEvidence`
+/// acceptance (`NotEstablished -> Established`) is a later checkpoint, not
+/// implemented yet. This directly forces the persisted
+/// `trusted_bootstrap_state` to `Established` via narrow SQL, purely so the
+/// tests below can exercise "does a same-boot reconnect/genuine-reboot
+/// preserve-or-reset an already-Established state" without depending on
+/// unimplemented production evidence handling.
+async fn set_trusted_bootstrap_established(pool: &PgPool, endpoint_id: EndpointId) {
+    sqlx::query("UPDATE endpoints SET trusted_bootstrap_state = 'Established' WHERE id = $1")
+        .bind(endpoint_id.0)
+        .execute(pool)
+        .await
+        .expect("test-only trusted_bootstrap_state override must succeed");
+}
+
+async fn current_boot_of(pool: &PgPool, endpoint_id: EndpointId) -> bamep_domain::CurrentBoot {
+    PostgresEndpointRepository::new(pool.clone())
+        .find_by_id(endpoint_id)
+        .await
+        .unwrap()
+        .expect("endpoint must exist")
+        .current_boot
+        .expect("current boot must be set")
 }
 
 #[tokio::test]
@@ -1165,6 +1205,253 @@ async fn first_contact_rolls_back_entirely_when_lookup_projection_fails() {
         resolved, None,
         "BootContext resolution must not survive rollback of a transaction that failed later"
     );
+
+    // CurrentBoot is written as part of the same `endpoints` INSERT that
+    // just proved zero rows survived rollback — but assert it explicitly:
+    // no row anywhere may carry a replaced/committed current-boot
+    // projection from this failed transaction.
+    let current_boot_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM endpoints WHERE current_boot_context_id = $1")
+            .bind(e1.lookup_id().to_bytes().to_vec())
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        current_boot_rows, 0,
+        "no Endpoint's current-boot projection may reference this BootContext after rollback"
+    );
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn first_contact_establishes_current_boot_not_established() {
+    let db = TestDatabase::setup().await;
+    let (boot_orchestration, enrollment, clock) = build_services(db.pool.clone());
+
+    let nonce_a = BootNonce::from_bytes([0x01; 32]);
+    let e1 = issue_e1_with_nonce(
+        &boot_orchestration,
+        "sim-current-boot-first-contact",
+        nonce_a,
+        clock.now(),
+    )
+    .await;
+    let boot_context_id_a = e1.lookup_id().clone();
+
+    let RedeemResult::Established { endpoint_id, .. } =
+        enrollment.redeem(&e1.to_wire_value()).await.unwrap()
+    else {
+        panic!("first contact must establish a session");
+    };
+
+    assert_eq!(
+        identity_state(&db.pool, endpoint_id).await,
+        "PendingEnrollment"
+    );
+
+    let current_boot = current_boot_of(&db.pool, endpoint_id).await;
+    assert_eq!(current_boot.boot_context_id(), &boot_context_id_a);
+    assert_eq!(current_boot.boot_nonce(), nonce_a);
+    assert_eq!(
+        current_boot.trusted_bootstrap(),
+        TrustedBootstrapState::NotEstablished
+    );
+
+    let resolved = boot_context_resolved_endpoint(&db.pool, &boot_context_id_a.to_bytes()).await;
+    assert_eq!(
+        resolved,
+        Some(endpoint_id.0),
+        "BootContext A must resolve to the same Endpoint, committed atomically with the rest"
+    );
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn same_boot_reconnect_preserves_established_current_boot() {
+    let db = TestDatabase::setup().await;
+    let (boot_orchestration, enrollment, clock) = build_services(db.pool.clone());
+
+    let nonce_a = BootNonce::from_bytes([0x02; 32]);
+    let e1 = issue_e1_with_nonce(
+        &boot_orchestration,
+        "sim-current-boot-same-boot",
+        nonce_a,
+        clock.now(),
+    )
+    .await;
+    let boot_context_id_a = e1.lookup_id().clone();
+    let RedeemResult::Established {
+        endpoint_id,
+        runtime_credential: r1,
+        ..
+    } = enrollment.redeem(&e1.to_wire_value()).await.unwrap()
+    else {
+        panic!("first contact must establish a session");
+    };
+
+    // Test-only: see `set_trusted_bootstrap_established` doc comment.
+    set_trusted_bootstrap_established(&db.pool, endpoint_id).await;
+    let established_before = current_boot_of(&db.pool, endpoint_id).await;
+    assert_eq!(
+        established_before.trusted_bootstrap(),
+        TrustedBootstrapState::Established
+    );
+
+    // Same-boot reconnect: a valid runtime successor redemption.
+    clock.advance(Duration::seconds(5));
+    let result = enrollment.redeem(&r1.to_wire_value()).await.unwrap();
+    assert!(matches!(result, RedeemResult::Established { .. }));
+
+    let current_boot_after = current_boot_of(&db.pool, endpoint_id).await;
+    assert_eq!(current_boot_after.boot_context_id(), &boot_context_id_a);
+    assert_eq!(current_boot_after.boot_nonce(), nonce_a);
+    assert_eq!(
+        current_boot_after.trusted_bootstrap(),
+        TrustedBootstrapState::Established,
+        "same-boot credential reconnect/rotation must preserve CurrentBoot exactly, \
+         including an already-Established state"
+    );
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn genuine_reboot_replaces_current_boot_and_resets_trust_from_established() {
+    let db = TestDatabase::setup().await;
+    let (boot_orchestration, enrollment, clock) = build_services(db.pool.clone());
+
+    let signal = "sim-current-boot-reboot";
+    let nonce_a = BootNonce::from_bytes([0x03; 32]);
+    let e1 = issue_e1_with_nonce(&boot_orchestration, signal, nonce_a, clock.now()).await;
+    let boot_context_id_a = e1.lookup_id().clone();
+    let RedeemResult::Established { endpoint_id, .. } =
+        enrollment.redeem(&e1.to_wire_value()).await.unwrap()
+    else {
+        panic!("first contact must establish a session");
+    };
+
+    // Test-only: see `set_trusted_bootstrap_established` doc comment. The
+    // production genuine_reboot Domain transition itself must perform the
+    // reset below, independent of this test-only setup.
+    set_trusted_bootstrap_established(&db.pool, endpoint_id).await;
+
+    clock.advance(Duration::hours(2));
+    let nonce_b = BootNonce::from_bytes([0x04; 32]);
+    assert_ne!(nonce_a, nonce_b);
+    let e2 = issue_e1_with_nonce(&boot_orchestration, signal, nonce_b, clock.now()).await;
+    let boot_context_id_b = e2.lookup_id().clone();
+    assert_ne!(boot_context_id_a, boot_context_id_b);
+
+    let result = enrollment.redeem(&e2.to_wire_value()).await.unwrap();
+    let RedeemResult::Established {
+        endpoint_id: id_after_reboot,
+        ..
+    } = result
+    else {
+        panic!(
+            "a fresh, valid enrollment credential must re-establish a chain for a known Endpoint"
+        )
+    };
+    assert_eq!(
+        id_after_reboot, endpoint_id,
+        "EndpointId/identity must be preserved across a genuine reboot"
+    );
+
+    let current_boot = current_boot_of(&db.pool, endpoint_id).await;
+    assert_eq!(current_boot.boot_context_id(), &boot_context_id_b);
+    assert_ne!(current_boot.boot_context_id(), &boot_context_id_a);
+    assert_eq!(current_boot.boot_nonce(), nonce_b);
+    assert_ne!(current_boot.boot_nonce(), nonce_a);
+    assert_eq!(
+        current_boot.trusted_bootstrap(),
+        TrustedBootstrapState::NotEstablished,
+        "genuine reboot must reset trusted bootstrap to NotEstablished even though the \
+         previous CurrentBoot was Established"
+    );
+
+    let resolved = boot_context_resolved_endpoint(&db.pool, &boot_context_id_b.to_bytes()).await;
+    assert_eq!(resolved, Some(endpoint_id.0));
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn rejected_credential_does_not_change_current_boot() {
+    let db = TestDatabase::setup().await;
+    let (boot_orchestration, enrollment, clock) = build_services(db.pool.clone());
+
+    let nonce_a = BootNonce::from_bytes([0x06; 32]);
+    let e1 = issue_e1_with_nonce(
+        &boot_orchestration,
+        "sim-current-boot-rejection",
+        nonce_a,
+        clock.now(),
+    )
+    .await;
+    let RedeemResult::Established { endpoint_id, .. } =
+        enrollment.redeem(&e1.to_wire_value()).await.unwrap()
+    else {
+        panic!("first contact must establish a session");
+    };
+    set_trusted_bootstrap_established(&db.pool, endpoint_id).await;
+
+    let before = current_boot_of(&db.pool, endpoint_id).await;
+
+    // A well-formed but unrelated credential — never authenticates against
+    // this (or any) chain.
+    let bogus = PresentedCredential::generate(CredentialKind::Runtime);
+    let rejected = enrollment.redeem(&bogus.to_wire_value()).await.unwrap();
+    assert!(matches!(rejected, RedeemResult::Rejected));
+
+    let after = current_boot_of(&db.pool, endpoint_id).await;
+    assert_eq!(
+        after, before,
+        "a rejected redemption must change none of current_boot's fields"
+    );
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn historical_boot_context_with_null_nonce_fails_closed_on_redemption() {
+    let db = TestDatabase::setup().await;
+    let (_boot, enrollment, clock) = build_services(db.pool.clone());
+
+    // Simulates a pre-migration-0004 historical BootContext row: real,
+    // schema-valid columns, but NULL boot_nonce — exactly what migration
+    // 0004 leaves existing rows as (no fabricated/backfilled nonce).
+    // Inserted directly against the schema, not through
+    // BootOrchestrationService, which always supplies a non-NULL nonce for
+    // newly issued BootContexts.
+    let credential = PresentedCredential::generate(CredentialKind::Enrollment);
+    let verifier = CredentialHash::of_bytes(credential.secret().expose_secret_bytes());
+    let now = clock.now();
+    sqlx::query(
+        "INSERT INTO boot_contexts \
+         (boot_context_id, verifier, issued_at, expires_at, inventory_signal, boot_nonce) \
+         VALUES ($1, $2, $3, $4, $5, NULL)",
+    )
+    .bind(credential.lookup_id().to_bytes().to_vec())
+    .bind(verifier.to_bytes().to_vec())
+    .bind(now)
+    .bind(now + Duration::minutes(5))
+    .bind("sim-historical-null-nonce")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = enrollment
+        .redeem(&credential.to_wire_value())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ApplicationError::Repository(_)),
+        "a historical BootContext row with a NULL boot_nonce must fail closed rather than be \
+         silently accepted as a valid new-flow BootContext"
+    );
+    assert_eq!(total_endpoint_count(&db.pool).await, 0);
 
     db.teardown().await;
 }

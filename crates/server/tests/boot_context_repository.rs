@@ -13,7 +13,7 @@ mod support;
 
 use bamep_domain::credential::CredentialHash;
 use bamep_domain::presented_credential::{CredentialLookupId, PresentedCredentialSecret};
-use bamep_domain::{BootContext, EndpointId};
+use bamep_domain::{BootContext, BootNonce, EndpointId};
 use bamep_server::adapters::postgres::PostgresBootContextRepository;
 use bamep_server::ports::{BootContextRepository, RepositoryError};
 use chrono::{Duration, SubsecRound, Utc};
@@ -47,6 +47,10 @@ fn now_micros() -> chrono::DateTime<Utc> {
     Utc::now().trunc_subsecs(6)
 }
 
+fn test_boot_nonce() -> BootNonce {
+    BootNonce::from_bytes([0x5A; 32])
+}
+
 fn fresh_unresolved_context(secret: &PresentedCredentialSecret) -> BootContext {
     let now = now_micros();
     BootContext::new(
@@ -55,6 +59,7 @@ fn fresh_unresolved_context(secret: &PresentedCredentialSecret) -> BootContext {
         now,
         now + Duration::minutes(5),
         "sim-boot-context-repo".into(),
+        test_boot_nonce(),
     )
 }
 
@@ -63,7 +68,7 @@ async fn fetch_boot_context_row(
     boot_context_id: &[u8],
 ) -> Option<sqlx::postgres::PgRow> {
     sqlx::query(
-        "SELECT boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id \
+        "SELECT boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id, boot_nonce \
          FROM boot_contexts WHERE boot_context_id = $1",
     )
     .bind(boot_context_id)
@@ -94,6 +99,7 @@ async fn inserting_an_unresolved_boot_context_succeeds_and_persists_exact_fields
     let persisted_expires_at: chrono::DateTime<Utc> = row.try_get("expires_at").unwrap();
     let persisted_signal: String = row.try_get("inventory_signal").unwrap();
     let persisted_resolved: Option<Uuid> = row.try_get("resolved_endpoint_id").unwrap();
+    let persisted_nonce: Option<Vec<u8>> = row.try_get("boot_nonce").unwrap();
 
     assert_eq!(persisted_id, context.boot_context_id().to_bytes().to_vec());
     assert_eq!(persisted_verifier, context.verifier().to_bytes().to_vec());
@@ -103,6 +109,51 @@ async fn inserting_an_unresolved_boot_context_succeeds_and_persists_exact_fields
     assert_eq!(
         persisted_resolved, None,
         "a newly issued BootContext must persist a NULL resolved_endpoint_id"
+    );
+    assert_eq!(
+        persisted_nonce,
+        Some(context.boot_nonce().as_bytes().to_vec()),
+        "the exact 32-byte BootNonce must be persisted"
+    );
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn boot_context_boot_nonce_round_trips_exactly_through_a_fresh_connection() {
+    let db = TestDatabase::setup().await;
+    let repo = PostgresBootContextRepository::new(db.pool.clone());
+
+    let secret = PresentedCredentialSecret::generate();
+    let context = fresh_unresolved_context(&secret);
+
+    repo.insert_boot_context(&context)
+        .await
+        .expect("insert must succeed");
+
+    // A separate pool/connection than the one the repo inserted through —
+    // proving durable commit, not merely in-process/same-connection
+    // visibility, matching this crate's other durability-proof style.
+    let fresh_pool = PgPool::connect(&db.db_url)
+        .await
+        .expect("reconnect to the same durable database");
+    let row = fetch_boot_context_row(&fresh_pool, &context.boot_context_id().to_bytes())
+        .await
+        .expect("row must be visible to a fresh connection");
+
+    let persisted_nonce_bytes: Vec<u8> = row
+        .try_get::<Option<Vec<u8>>, _>("boot_nonce")
+        .unwrap()
+        .expect("a newly inserted BootContext always has a non-NULL boot_nonce");
+    let reconstructed_array: [u8; 32] = persisted_nonce_bytes
+        .try_into()
+        .expect("persisted boot_nonce must be exactly 32 bytes");
+    let reconstructed = BootNonce::from_bytes(reconstructed_array);
+
+    assert_eq!(
+        reconstructed,
+        context.boot_nonce(),
+        "reconstructing BootNonce from its persisted bytes must equal the original exactly"
     );
 
     db.teardown().await;
@@ -123,6 +174,7 @@ async fn inserting_a_resolved_boot_context_preserves_the_resolved_endpoint_id() 
         now + Duration::minutes(5),
         "sim-boot-context-repo-resolved".into(),
         Some(EndpointId(endpoint_uuid)),
+        test_boot_nonce(),
     );
 
     repo.insert_boot_context(&context)
@@ -161,6 +213,7 @@ async fn duplicate_boot_context_id_is_rejected_and_does_not_overwrite_the_origin
         now + Duration::minutes(30),
         "sim-boot-context-repo-colliding".into(),
         None,
+        test_boot_nonce(),
     );
 
     let result = repo.insert_boot_context(&colliding).await;

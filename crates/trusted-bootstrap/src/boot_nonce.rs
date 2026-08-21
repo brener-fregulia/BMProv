@@ -84,6 +84,71 @@ fn is_canonical_base64url_char(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
 }
 
+/// Non-default `serde` support (`m0-trusted-bootstrap-and-server-fingerprint-
+/// contract.md` "Shared contract implementation boundary"): serializes
+/// through the already-normative canonical 43-character base64url-no-pad
+/// wire representation, delegating deserialization to the same strict
+/// [`BootNonce::parse_wire_value`] every other carrier uses — never a second,
+/// raw-`[u8; 32]` representation inconsistent with the contract.
+#[cfg(feature = "serde")]
+impl serde::Serialize for BootNonce {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_wire_value())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for BootNonce {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = String::deserialize(deserializer)?;
+        BootNonce::parse_wire_value(&wire).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn serializes_as_the_canonical_wire_string() {
+        let nonce = BootNonce::from_bytes([9u8; BOOT_NONCE_BYTES]);
+        let json = serde_json_value(&nonce);
+        assert_eq!(json, format!("\"{}\"", nonce.to_wire_value()));
+    }
+
+    #[test]
+    fn round_trips_through_serde_json() {
+        let nonce = BootNonce::from_bytes([3u8; BOOT_NONCE_BYTES]);
+        let json = serde_json_value(&nonce);
+        let deserialized: BootNonce = serde_json_from_str(&json);
+        assert_eq!(deserialized, nonce);
+    }
+
+    #[test]
+    fn deserialization_delegates_to_strict_parse_wire_value() {
+        // Non-canonical (padded) input must be rejected exactly like
+        // `parse_wire_value` rejects it directly — no separate, more lenient
+        // serde-specific path.
+        let padded = format!("\"{}=\"", "A".repeat(BOOT_NONCE_WIRE_LEN));
+        let result: Result<BootNonce, serde_json::Error> = serde_json::from_str(&padded);
+        assert!(result.is_err());
+    }
+
+    fn serde_json_value(nonce: &BootNonce) -> String {
+        serde_json::to_string(nonce).expect("BootNonce always serializes")
+    }
+
+    fn serde_json_from_str(json: &str) -> BootNonce {
+        serde_json::from_str(json).expect("canonical wire JSON string always deserializes")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

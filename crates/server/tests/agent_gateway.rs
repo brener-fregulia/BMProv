@@ -76,7 +76,12 @@ async fn issue_e1(
     signal: &str,
     now: DateTime<Utc>,
 ) -> PresentedCredential {
-    boot.issue_enrollment_credential(signal, now)
+    // This file proves Gateway wire-level semantics, not current-boot
+    // persistence (see `enrollment_lifecycle.rs` for that) — a fresh,
+    // discarded BootNonce is sufficient here.
+    let boot_nonce =
+        bamep_domain::BootNonce::generate().expect("OS CSPRNG must be available in tests");
+    boot.issue_enrollment_credential(signal, boot_nonce, now)
         .await
         .expect("issuance must succeed")
 }

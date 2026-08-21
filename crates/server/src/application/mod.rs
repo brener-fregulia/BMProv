@@ -11,7 +11,8 @@ use std::sync::Arc;
 use bamep_domain::credential::CredentialHash;
 use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
 use bamep_domain::{
-    transitions, Actor, BootContext, EndpointId, InvalidIdentityTransition, DEFAULT_CREDENTIAL_TTL,
+    transitions, Actor, BootContext, BootNonce, EndpointId, InvalidIdentityTransition,
+    DEFAULT_CREDENTIAL_TTL,
 };
 use chrono::{DateTime, Duration, Utc};
 
@@ -112,9 +113,17 @@ impl<R: BootContextRepository> BootOrchestrationService<R> {
     /// `inventory_signal` is the current WP1 correlation-evidence stand-in
     /// stored on `BootContext` — evidence only, never authentication and
     /// never Endpoint identity (ADR-0004; ADR-0014 point 4).
+    ///
+    /// `boot_nonce` belongs to the trusted-bootstrap contract
+    /// (`m0-trusted-bootstrap-and-server-fingerprint-contract.md` "(C)
+    /// Authenticated and fresh bootstrap material") and is supplied by the
+    /// caller — the trusted-bootstrap/boot boundary that generated it for
+    /// this actual boot context. This service never generates or substitutes
+    /// its own `BootNonce`; it only persists the one it was given, exactly.
     pub async fn issue_enrollment_credential(
         &self,
         inventory_signal: &str,
+        boot_nonce: BootNonce,
         now: DateTime<Utc>,
     ) -> Result<PresentedCredential, ApplicationError> {
         let credential = PresentedCredential::generate(CredentialKind::Enrollment);
@@ -125,6 +134,7 @@ impl<R: BootContextRepository> BootOrchestrationService<R> {
             now,
             now + self.enrollment_ttl,
             inventory_signal.to_string(),
+            boot_nonce,
         );
         self.repo.insert_boot_context(&context).await?;
         Ok(credential)
@@ -345,13 +355,17 @@ mod tests {
         Utc::now()
     }
 
+    fn test_boot_nonce() -> BootNonce {
+        BootNonce::from_bytes([0x5A; 32])
+    }
+
     #[tokio::test]
     async fn issuance_returns_a_valid_self_locating_enrollment_credential() {
         let repo = Arc::new(FakeBootContextRepository::new());
         let service = BootOrchestrationService::new(repo, Duration::minutes(5));
 
         let credential = service
-            .issue_enrollment_credential("sim-boot-orch-01", now())
+            .issue_enrollment_credential("sim-boot-orch-01", test_boot_nonce(), now())
             .await
             .expect("issuance must succeed");
 
@@ -369,7 +383,7 @@ mod tests {
 
         assert!(repo.persisted().is_empty());
         let credential = service
-            .issue_enrollment_credential("sim-boot-orch-02", now())
+            .issue_enrollment_credential("sim-boot-orch-02", test_boot_nonce(), now())
             .await
             .expect("issuance must succeed");
 
@@ -388,9 +402,10 @@ mod tests {
         let ttl = Duration::minutes(5);
         let service = BootOrchestrationService::new(Arc::clone(&repo), ttl);
         let issued_at = now();
+        let boot_nonce = test_boot_nonce();
 
         let credential = service
-            .issue_enrollment_credential("sim-boot-orch-03", issued_at)
+            .issue_enrollment_credential("sim-boot-orch-03", boot_nonce, issued_at)
             .await
             .expect("issuance must succeed");
 
@@ -403,6 +418,26 @@ mod tests {
         assert_eq!(context.expires_at(), issued_at + ttl);
         assert_eq!(context.inventory_signal(), "sim-boot-orch-03");
         assert_eq!(context.resolved_endpoint_id(), None);
+        assert_eq!(context.boot_nonce(), boot_nonce);
+    }
+
+    #[tokio::test]
+    async fn caller_supplied_boot_nonce_is_persisted_exactly_and_never_substituted() {
+        let repo = Arc::new(FakeBootContextRepository::new());
+        let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
+        let boot_nonce = BootNonce::from_bytes([0x77; 32]);
+
+        service
+            .issue_enrollment_credential("sim-boot-orch-nonce-01", boot_nonce, now())
+            .await
+            .expect("issuance must succeed");
+
+        let persisted = repo.persisted();
+        assert_eq!(
+            persisted[0].boot_nonce(),
+            boot_nonce,
+            "the service must persist exactly the caller-supplied BootNonce, never one of its own"
+        );
     }
 
     #[tokio::test]
@@ -411,11 +446,11 @@ mod tests {
         let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
 
         let a = service
-            .issue_enrollment_credential("sim-boot-orch-04", now())
+            .issue_enrollment_credential("sim-boot-orch-04", test_boot_nonce(), now())
             .await
             .unwrap();
         let b = service
-            .issue_enrollment_credential("sim-boot-orch-04", now())
+            .issue_enrollment_credential("sim-boot-orch-04", test_boot_nonce(), now())
             .await
             .unwrap();
 
@@ -432,7 +467,7 @@ mod tests {
         let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
 
         let err = service
-            .issue_enrollment_credential("sim-boot-orch-05", now())
+            .issue_enrollment_credential("sim-boot-orch-05", test_boot_nonce(), now())
             .await
             .unwrap_err();
 

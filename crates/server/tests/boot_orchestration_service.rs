@@ -14,6 +14,7 @@ mod support;
 use std::sync::Arc;
 
 use bamep_domain::presented_credential::CredentialKind;
+use bamep_domain::BootNonce;
 use bamep_server::adapters::postgres::PostgresBootContextRepository;
 use bamep_server::application::BootOrchestrationService;
 use chrono::{Duration, Utc};
@@ -37,8 +38,9 @@ async fn issuance_returns_only_after_the_boot_context_row_is_durably_queryable()
     let service = BootOrchestrationService::new(repo, Duration::minutes(5));
 
     let now = Utc::now();
+    let boot_nonce = BootNonce::from_bytes([0x11; 32]);
     let credential = service
-        .issue_enrollment_credential("sim-boot-orch-pg-01", now)
+        .issue_enrollment_credential("sim-boot-orch-pg-01", boot_nonce, now)
         .await
         .expect("issuance against the real PostgreSQL adapter must succeed");
 

@@ -15,6 +15,7 @@
 //! directly, and knows nothing about PostgreSQL, locking, or how it is
 //! persisted. Those remain later checkpoints.
 
+use bamep_trusted_bootstrap::BootNonce;
 use chrono::{DateTime, Utc};
 
 use crate::credential::CredentialHash;
@@ -36,6 +37,14 @@ pub struct BootContext {
     issued_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     inventory_signal: String,
+    /// The trusted-bootstrap freshness/correlation value supplied by the
+    /// trusted-bootstrap/boot boundary at issuance
+    /// (`m0-trusted-bootstrap-and-server-fingerprint-contract.md` "(C)
+    /// Authenticated and fresh bootstrap material"; ADR-0014 "Amendment
+    /// (owner-approved, WP1 trusted-bootstrap checkpoint)"). Immutable for
+    /// this `BootContext`: never generated, derived, or replaced here — only
+    /// ever carried through unchanged by [`BootContext::resolve`].
+    boot_nonce: BootNonce,
     resolved_endpoint_id: Option<EndpointId>,
 }
 
@@ -54,12 +63,17 @@ impl BootContext {
     /// [`CredentialHash::of_bytes`] over a [`PresentedCredentialSecret`]'s
     /// raw bytes) — this constructor never sees or stores the plaintext
     /// secret itself.
+    /// `boot_nonce` is required explicitly: the trusted-bootstrap/boot
+    /// boundary supplies it — this constructor never generates, derives, or
+    /// defaults it (not from `boot_context_id`, `inventory_signal`, a
+    /// credential, `EndpointId`, or any timestamp).
     pub fn new(
         boot_context_id: CredentialLookupId,
         verifier: CredentialHash,
         issued_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         inventory_signal: String,
+        boot_nonce: BootNonce,
     ) -> Self {
         Self {
             boot_context_id,
@@ -67,6 +81,7 @@ impl BootContext {
             issued_at,
             expires_at,
             inventory_signal,
+            boot_nonce,
             resolved_endpoint_id: None,
         }
     }
@@ -76,6 +91,7 @@ impl BootContext {
     /// the only legitimate caller — this constructor trusts the caller to
     /// hand back exactly what a prior `new`/commit produced, and enforces no
     /// invariant of its own beyond the type signature.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         boot_context_id: CredentialLookupId,
         verifier: CredentialHash,
@@ -83,6 +99,7 @@ impl BootContext {
         expires_at: DateTime<Utc>,
         inventory_signal: String,
         resolved_endpoint_id: Option<EndpointId>,
+        boot_nonce: BootNonce,
     ) -> Self {
         Self {
             boot_context_id,
@@ -90,12 +107,19 @@ impl BootContext {
             issued_at,
             expires_at,
             inventory_signal,
+            boot_nonce,
             resolved_endpoint_id,
         }
     }
 
     pub fn boot_context_id(&self) -> &CredentialLookupId {
         &self.boot_context_id
+    }
+
+    /// Immutable for this `BootContext` — [`BootContext::resolve`] preserves
+    /// it exactly.
+    pub fn boot_nonce(&self) -> BootNonce {
+        self.boot_nonce
     }
 
     /// Read-only access to the stored verifier, for a relational Adapter to
@@ -175,6 +199,10 @@ mod tests {
         Utc::now()
     }
 
+    fn test_boot_nonce() -> BootNonce {
+        BootNonce::from_bytes([0xAA; 32])
+    }
+
     fn fresh_context(secret: &PresentedCredentialSecret, ttl: Duration) -> BootContext {
         BootContext::new(
             CredentialLookupId::generate(),
@@ -182,6 +210,7 @@ mod tests {
             now(),
             now() + ttl,
             "inventory-signal-e1".into(),
+            test_boot_nonce(),
         )
     }
 
@@ -195,6 +224,7 @@ mod tests {
             now(),
             now() + Duration::minutes(5),
             "inventory-signal-e1".into(),
+            test_boot_nonce(),
         );
 
         // The lookup id round-trips through the accessor exactly...
@@ -232,6 +262,7 @@ mod tests {
             now() + Duration::minutes(5),
             "inventory-signal-e1".into(),
             None,
+            test_boot_nonce(),
         );
 
         // Reconstructing the same verifier from its durable bytes and
@@ -282,8 +313,42 @@ mod tests {
             now() + Duration::minutes(5),
             "inventory-signal-e1".into(),
             Some(endpoint_id),
+            test_boot_nonce(),
         );
         assert_eq!(context.resolved_endpoint_id(), Some(endpoint_id));
+    }
+
+    #[test]
+    fn stores_the_exact_supplied_boot_nonce() {
+        let secret = PresentedCredentialSecret::generate();
+        let nonce = BootNonce::from_bytes([0x42; 32]);
+        let context = BootContext::new(
+            CredentialLookupId::generate(),
+            CredentialHash::of_bytes(secret.expose_secret_bytes()),
+            now(),
+            now() + Duration::minutes(5),
+            "inventory-signal-e1".into(),
+            nonce,
+        );
+        assert_eq!(context.boot_nonce(), nonce);
+    }
+
+    #[test]
+    fn resolve_preserves_the_exact_boot_nonce() {
+        let secret = PresentedCredentialSecret::generate();
+        let nonce = BootNonce::from_bytes([0x77; 32]);
+        let context = BootContext::new(
+            CredentialLookupId::generate(),
+            CredentialHash::of_bytes(secret.expose_secret_bytes()),
+            now(),
+            now() + Duration::minutes(5),
+            "inventory-signal-e1".into(),
+            nonce,
+        );
+        let resolved = context
+            .resolve(EndpointId::new())
+            .expect("first resolution succeeds");
+        assert_eq!(resolved.boot_nonce(), nonce);
     }
 
     #[test]
@@ -314,6 +379,7 @@ mod tests {
         assert_eq!(resolved.issued_at(), context.issued_at());
         assert_eq!(resolved.expires_at(), context.expires_at());
         assert_eq!(resolved.inventory_signal(), context.inventory_signal());
+        assert_eq!(resolved.boot_nonce(), context.boot_nonce());
     }
 
     #[test]

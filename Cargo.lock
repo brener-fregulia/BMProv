@@ -97,6 +97,7 @@ dependencies = [
 name = "bamep-domain"
 version = "0.1.0"
 dependencies = [
+ "bamep-trusted-bootstrap",
  "base64",
  "chrono",
  "rand 0.8.7",
@@ -154,6 +155,8 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "getrandom 0.2.17",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 1.0.69",
 ]

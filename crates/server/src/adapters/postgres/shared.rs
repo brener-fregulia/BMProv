@@ -9,7 +9,8 @@
 use bamep_domain::credential::{CredentialChain, CredentialHash, CredentialSlot};
 use bamep_domain::presented_credential::CredentialLookupId;
 use bamep_domain::{
-    Actor, BootContext, DomainEvent, EndpointAggregate, EndpointId, TransitionOutcome,
+    Actor, BootContext, BootNonce, CurrentBoot, DomainEvent, EndpointAggregate, EndpointId,
+    TransitionOutcome, TrustedBootstrapState,
 };
 use sqlx::{Postgres, Row, Transaction};
 
@@ -109,6 +110,35 @@ pub(super) enum PgCredentialSlotRole {
     Successor,
 }
 
+/// Adapter-local representation of the `trusted_bootstrap_state` PostgreSQL
+/// ENUM (migration `0004_current_boot_and_trusted_bootstrap_state.sql`).
+/// Domain (`bamep_domain::TrustedBootstrapState`) stays free of SQLx/
+/// PostgreSQL derives — mapped explicitly to/from Domain below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "trusted_bootstrap_state")]
+pub(super) enum PgTrustedBootstrapState {
+    NotEstablished,
+    Established,
+}
+
+impl From<TrustedBootstrapState> for PgTrustedBootstrapState {
+    fn from(state: TrustedBootstrapState) -> Self {
+        match state {
+            TrustedBootstrapState::NotEstablished => PgTrustedBootstrapState::NotEstablished,
+            TrustedBootstrapState::Established => PgTrustedBootstrapState::Established,
+        }
+    }
+}
+
+impl From<PgTrustedBootstrapState> for TrustedBootstrapState {
+    fn from(state: PgTrustedBootstrapState) -> Self {
+        match state {
+            PgTrustedBootstrapState::NotEstablished => TrustedBootstrapState::NotEstablished,
+            PgTrustedBootstrapState::Established => TrustedBootstrapState::Established,
+        }
+    }
+}
+
 pub(super) fn actor_label(actor: &Actor) -> Option<&str> {
     match actor {
         Actor::Operator { label } => Some(label.as_str()),
@@ -183,6 +213,7 @@ macro_rules! endpoint_select {
     () => {
         r#"
         SELECT e.id, e.inventory_signal, e.identity_state, e.created_at, e.updated_at,
+               e.current_boot_context_id, e.current_boot_nonce, e.trusted_bootstrap_state,
                c.predecessor_verifier, c.predecessor_issued_at, c.predecessor_expires_at,
                c.successor_verifier, c.successor_issued_at, c.successor_expires_at, c.revoked,
                lp.lookup_id AS predecessor_lookup_id,
@@ -195,12 +226,52 @@ macro_rules! endpoint_select {
     };
 }
 
+/// Reconstructs the Endpoint current-boot projection
+/// (`bamep_domain::CurrentBoot`) from its three SQL columns. PostgreSQL's own
+/// all-or-none `CHECK` constraint (migration `0004_...`) should already
+/// prevent a partially-populated row, but this Adapter mapping fails closed
+/// with `RepositoryError` on an inconsistent partial projection rather than
+/// trusting that constraint alone.
+fn row_to_current_boot(
+    row: &sqlx::postgres::PgRow,
+) -> Result<Option<CurrentBoot>, RepositoryError> {
+    let context_id: Option<Vec<u8>> = row
+        .try_get("current_boot_context_id")
+        .map_err(to_backend_err)?;
+    let nonce_bytes: Option<Vec<u8>> = row.try_get("current_boot_nonce").map_err(to_backend_err)?;
+    let trusted_bootstrap_state: Option<PgTrustedBootstrapState> = row
+        .try_get("trusted_bootstrap_state")
+        .map_err(to_backend_err)?;
+
+    match (context_id, nonce_bytes, trusted_bootstrap_state) {
+        (None, None, None) => Ok(None),
+        (Some(id_bytes), Some(nonce_bytes), Some(state)) => {
+            let boot_context_id = lookup_id_from_bytes(id_bytes)?;
+            let nonce_array: [u8; 32] = nonce_bytes.try_into().map_err(|bytes: Vec<u8>| {
+                RepositoryError::Backend(format!(
+                    "current_boot_nonce has unexpected length {} (expected 32)",
+                    bytes.len()
+                ))
+            })?;
+            Ok(Some(CurrentBoot::new(
+                boot_context_id,
+                BootNonce::from_bytes(nonce_array),
+                state.into(),
+            )))
+        }
+        _ => Err(RepositoryError::Backend(
+            "persisted endpoint current-boot projection is partially populated".to_string(),
+        )),
+    }
+}
+
 fn row_to_aggregate(row: &sqlx::postgres::PgRow) -> Result<EndpointAggregate, RepositoryError> {
     let id: uuid::Uuid = row.try_get("id").map_err(to_backend_err)?;
     let inventory_signal: String = row.try_get("inventory_signal").map_err(to_backend_err)?;
     let identity_state: PgIdentityState = row.try_get("identity_state").map_err(to_backend_err)?;
     let created_at = row.try_get("created_at").map_err(to_backend_err)?;
     let updated_at = row.try_get("updated_at").map_err(to_backend_err)?;
+    let current_boot = row_to_current_boot(row)?;
 
     let predecessor_verifier: Vec<u8> = row
         .try_get("predecessor_verifier")
@@ -251,6 +322,7 @@ fn row_to_aggregate(row: &sqlx::postgres::PgRow) -> Result<EndpointAggregate, Re
         inventory_signal,
         identity: identity_state.into(),
         credential: CredentialChain::from_parts(predecessor, successor, revoked),
+        current_boot,
         created_at,
         updated_at,
     })
@@ -315,13 +387,34 @@ pub(super) async fn persist_transition(
 ) -> Result<(), RepositoryError> {
     let endpoint = &outcome.endpoint;
 
+    let (current_boot_context_id, current_boot_nonce, trusted_bootstrap_state): (
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<PgTrustedBootstrapState>,
+    ) = match &endpoint.current_boot {
+        Some(current_boot) => (
+            Some(current_boot.boot_context_id().to_bytes().to_vec()),
+            Some(current_boot.boot_nonce().as_bytes().to_vec()),
+            Some(PgTrustedBootstrapState::from(
+                current_boot.trusted_bootstrap(),
+            )),
+        ),
+        None => (None, None, None),
+    };
+
     sqlx::query(
         r#"
-        INSERT INTO endpoints (id, inventory_signal, identity_state, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO endpoints (
+            id, inventory_signal, identity_state, created_at, updated_at,
+            current_boot_context_id, current_boot_nonce, trusted_bootstrap_state
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (id) DO UPDATE SET
             identity_state = EXCLUDED.identity_state,
-            updated_at = EXCLUDED.updated_at
+            updated_at = EXCLUDED.updated_at,
+            current_boot_context_id = EXCLUDED.current_boot_context_id,
+            current_boot_nonce = EXCLUDED.current_boot_nonce,
+            trusted_bootstrap_state = EXCLUDED.trusted_bootstrap_state
         "#,
     )
     .bind(endpoint.id.0)
@@ -329,6 +422,9 @@ pub(super) async fn persist_transition(
     .bind(PgIdentityState::from(endpoint.identity))
     .bind(endpoint.created_at)
     .bind(endpoint.updated_at)
+    .bind(current_boot_context_id)
+    .bind(current_boot_nonce)
+    .bind(trusted_bootstrap_state)
     .execute(&mut **tx)
     .await
     .map_err(to_backend_err)?;
@@ -451,13 +547,19 @@ pub(super) async fn persist_lookup_projection(
 /// Locks and reconstructs a `BootContext` by its durable `boot_context_id`
 /// bytes, within `tx`. Used only by credential redemption routing — no other
 /// Adapter path reads `boot_contexts`.
+///
+/// Fails closed with `RepositoryError` when the row's `boot_nonce` is `NULL`
+/// (a historical, pre-`0004_current_boot_and_trusted_bootstrap_state.sql`
+/// row): such a row is never fabricated or backfilled a nonce, and is
+/// therefore never accepted as a valid new-flow `BootContext` — it cannot be
+/// redeemed through the current credential-redemption flow.
 pub(super) async fn load_boot_context_for_update(
     tx: &mut Transaction<'_, Postgres>,
     boot_context_id: &[u8],
 ) -> Result<Option<BootContext>, RepositoryError> {
     let row = sqlx::query(
         r#"
-        SELECT boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id
+        SELECT boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id, boot_nonce
         FROM boot_contexts
         WHERE boot_context_id = $1
         FOR UPDATE
@@ -480,6 +582,20 @@ pub(super) async fn load_boot_context_for_update(
     let resolved_endpoint_id: Option<uuid::Uuid> = row
         .try_get("resolved_endpoint_id")
         .map_err(to_backend_err)?;
+    let boot_nonce_bytes: Option<Vec<u8>> = row.try_get("boot_nonce").map_err(to_backend_err)?;
+    let boot_nonce_bytes = boot_nonce_bytes.ok_or_else(|| {
+        RepositoryError::Backend(
+            "boot context has no boot_nonce (a historical, pre-trusted-bootstrap row); it \
+             cannot be redeemed through the current credential-redemption flow"
+                .to_string(),
+        )
+    })?;
+    let boot_nonce_array: [u8; 32] = boot_nonce_bytes.try_into().map_err(|bytes: Vec<u8>| {
+        RepositoryError::Backend(format!(
+            "boot context boot_nonce has unexpected length {} (expected 32)",
+            bytes.len()
+        ))
+    })?;
 
     Ok(Some(BootContext::from_parts(
         lookup_id_from_bytes(id_bytes)?,
@@ -488,6 +604,7 @@ pub(super) async fn load_boot_context_for_update(
         expires_at,
         inventory_signal,
         resolved_endpoint_id.map(EndpointId),
+        BootNonce::from_bytes(boot_nonce_array),
     )))
 }
 

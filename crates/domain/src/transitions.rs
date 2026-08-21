@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::boot_context::{BootContext, BootContextResolveError};
 use crate::credential::{self, AuthOutcome, CredentialChain};
+use crate::current_boot::{CurrentBoot, TrustedBootstrapState};
 use crate::endpoint::{EndpointAggregate, EndpointId};
 use crate::events::{Actor, AuditRecord, DomainEvent, TransitionOutcome};
 use crate::identity::{self, IdentityState, InvalidIdentityTransition};
@@ -113,6 +114,11 @@ pub fn first_contact(
         inventory_signal: context.inventory_signal().to_string(),
         identity: IdentityState::PendingEnrollment,
         credential: chain,
+        current_boot: Some(CurrentBoot::new(
+            context.boot_context_id().clone(),
+            context.boot_nonce(),
+            TrustedBootstrapState::NotEstablished,
+        )),
         created_at: now,
         updated_at: now,
     };
@@ -258,6 +264,17 @@ pub fn genuine_reboot(
         outcome: TransitionOutcome {
             endpoint: EndpointAggregate {
                 credential: chain,
+                // Genuine reboot always replaces CurrentBoot with the newly
+                // redeemed BootContext's exact identity/nonce and resets
+                // trusted bootstrap to NotEstablished — mandatory even if the
+                // previous CurrentBoot was Established
+                // (`m0-trusted-bootstrap-and-server-fingerprint-contract.md`
+                // "Authoritative current boot and durable Server state").
+                current_boot: Some(CurrentBoot::new(
+                    context.boot_context_id().clone(),
+                    context.boot_nonce(),
+                    TrustedBootstrapState::NotEstablished,
+                )),
                 updated_at: now,
                 ..candidate.clone()
             },
@@ -345,12 +362,29 @@ mod tests {
         PresentedCredential::generate(CredentialKind::Runtime)
     }
 
+    /// Fixed test-only `BootNonce` for tests that don't need to distinguish
+    /// one boot's nonce from another's — see [`issue_boot_context_with_nonce`]
+    /// for tests that do (e.g. a genuine-reboot old-nonce/new-nonce
+    /// assertion).
+    fn default_boot_nonce() -> bamep_trusted_bootstrap::BootNonce {
+        bamep_trusted_bootstrap::BootNonce::from_bytes([0xAA; 32])
+    }
+
     /// Builds an unresolved `BootContext` plus the matching enrollment
     /// `PresentedCredential` that verifies against it — the pure-Domain
     /// stand-in for what `BootOrchestrationService::issue_enrollment_credential`
     /// produces end to end.
     fn issue_boot_context(
         inventory_signal: &str,
+        now: DateTime<Utc>,
+        ttl: Duration,
+    ) -> (BootContext, PresentedCredential) {
+        issue_boot_context_with_nonce(inventory_signal, default_boot_nonce(), now, ttl)
+    }
+
+    fn issue_boot_context_with_nonce(
+        inventory_signal: &str,
+        boot_nonce: bamep_trusted_bootstrap::BootNonce,
         now: DateTime<Utc>,
         ttl: Duration,
     ) -> (BootContext, PresentedCredential) {
@@ -362,6 +396,7 @@ mod tests {
             now,
             now + ttl,
             inventory_signal.to_string(),
+            boot_nonce,
         );
         (context, credential)
     }
@@ -790,5 +825,185 @@ mod tests {
             long_credential_ttl,
         );
         assert!(matches!(outcome, RedeemOutcome::Established { .. }));
+    }
+
+    #[test]
+    fn first_contact_creates_current_boot_not_established() {
+        let nonce = bamep_trusted_bootstrap::BootNonce::from_bytes([0x11; 32]);
+        let (context, e1) =
+            issue_boot_context_with_nonce("mac:AA:BB", nonce, now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!("first contact must establish")
+        };
+
+        let current_boot = outcome
+            .endpoint
+            .current_boot
+            .expect("first contact must set CurrentBoot");
+        assert_eq!(current_boot.boot_context_id(), context.boot_context_id());
+        assert_eq!(current_boot.boot_nonce(), nonce);
+        assert_eq!(
+            current_boot.trusted_bootstrap(),
+            TrustedBootstrapState::NotEstablished
+        );
+    }
+
+    #[test]
+    fn genuine_reboot_replaces_current_boot_and_resets_trust_from_established() {
+        let nonce_a = bamep_trusted_bootstrap::BootNonce::from_bytes([0x22; 32]);
+        let (context1, e1) =
+            issue_boot_context_with_nonce("mac:AA:BB", nonce_a, now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            &context1,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+
+        // Test-only: simulate a previously Established server-side trusted-
+        // bootstrap fact for the pre-reboot current boot. This is not the
+        // production evidence-acceptance transition (not implemented yet in
+        // this checkpoint) — it is a direct, narrowly scoped in-memory
+        // construction, exercising only the reset behavior genuine_reboot
+        // itself must perform.
+        let established_before_reboot = EndpointAggregate {
+            current_boot: Some(CurrentBoot::new(
+                context1.boot_context_id().clone(),
+                nonce_a,
+                TrustedBootstrapState::Established,
+            )),
+            ..first.endpoint.clone()
+        };
+
+        let nonce_b = bamep_trusted_bootstrap::BootNonce::from_bytes([0x33; 32]);
+        assert_ne!(nonce_a, nonce_b);
+        let (context2, e2) =
+            issue_boot_context_with_nonce("mac:AA:BB", nonce_b, now(), Duration::minutes(5));
+        let RedeemOutcome::Established {
+            outcome: rebooted, ..
+        } = genuine_reboot(
+            &context2,
+            &established_before_reboot,
+            &e2,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap()
+        else {
+            panic!("genuine reboot must establish a fresh chain")
+        };
+
+        let current_boot = rebooted
+            .endpoint
+            .current_boot
+            .expect("genuine reboot must set CurrentBoot");
+        assert_eq!(current_boot.boot_context_id(), context2.boot_context_id());
+        assert_ne!(current_boot.boot_context_id(), context1.boot_context_id());
+        assert_eq!(current_boot.boot_nonce(), nonce_b);
+        assert_ne!(current_boot.boot_nonce(), nonce_a);
+        assert_eq!(
+            current_boot.trusted_bootstrap(),
+            TrustedBootstrapState::NotEstablished,
+            "genuine reboot must reset trusted bootstrap to NotEstablished even when the \
+             previous CurrentBoot was Established"
+        );
+    }
+
+    #[test]
+    fn redeem_known_preserves_current_boot_exactly() {
+        let (context, e1) = issue_boot_context("mac:AA:BB", now(), Duration::minutes(5));
+        let r1 = fresh_runtime();
+        let RedeemOutcome::Established { outcome: first, .. } =
+            first_contact(&context, &e1, &r1, now(), DEFAULT_CREDENTIAL_TTL).unwrap()
+        else {
+            panic!()
+        };
+        let current_boot_before = first.endpoint.current_boot.clone();
+
+        let RedeemOutcome::Established { outcome, .. } = redeem_known(
+            &first.endpoint,
+            &r1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        ) else {
+            panic!("R1 must authenticate")
+        };
+
+        assert_eq!(
+            outcome.endpoint.current_boot, current_boot_before,
+            "routine rotation must not reset or replace CurrentBoot"
+        );
+        assert_eq!(
+            outcome
+                .endpoint
+                .current_boot
+                .as_ref()
+                .unwrap()
+                .trusted_bootstrap(),
+            TrustedBootstrapState::NotEstablished,
+            "ordinary redemption must never infer Established from a successful reconnect"
+        );
+    }
+
+    #[test]
+    fn approve_enrollment_preserves_current_boot() {
+        let (context, e1) = issue_boot_context("mac:AA:BB", now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let current_boot_before = first.endpoint.current_boot.clone();
+
+        let operator = Actor::Operator {
+            label: "wp1-harness".into(),
+        };
+        let approved = approve_enrollment(&first.endpoint, operator, now()).unwrap();
+
+        assert_eq!(
+            approved.endpoint.current_boot, current_boot_before,
+            "operator approval must not disturb CurrentBoot"
+        );
+    }
+
+    #[test]
+    fn revoke_credential_preserves_current_boot() {
+        let (context, e1) = issue_boot_context("mac:AA:BB", now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let current_boot_before = first.endpoint.current_boot.clone();
+
+        let revoked = revoke_credential(&first.endpoint, now());
+
+        assert_eq!(
+            revoked.endpoint.current_boot, current_boot_before,
+            "credential revocation must not disturb CurrentBoot"
+        );
     }
 }

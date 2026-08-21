@@ -10,14 +10,17 @@
 
 pub mod boot_context;
 pub mod credential;
+pub mod current_boot;
 pub mod endpoint;
 pub mod events;
 pub mod identity;
 pub mod presented_credential;
 pub mod transitions;
 
+pub use bamep_trusted_bootstrap::BootNonce;
 pub use boot_context::{BootContext, BootContextResolveError};
 pub use credential::{AuthOutcome, CredentialChain, CredentialDimension, DEFAULT_CREDENTIAL_TTL};
+pub use current_boot::{CurrentBoot, TrustedBootstrapState};
 pub use endpoint::{EndpointAggregate, EndpointId};
 pub use events::{Actor, AuditRecord, DomainEvent, TransitionOutcome};
 pub use identity::{IdentityState, InvalidIdentityTransition};

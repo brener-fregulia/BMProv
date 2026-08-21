@@ -32,9 +32,9 @@ impl BootContextRepository for PostgresBootContextRepository {
         sqlx::query(
             r#"
             INSERT INTO boot_contexts (
-                boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id
+                boot_context_id, verifier, issued_at, expires_at, inventory_signal, resolved_endpoint_id, boot_nonce
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(context.boot_context_id().to_bytes().to_vec())
@@ -43,6 +43,7 @@ impl BootContextRepository for PostgresBootContextRepository {
         .bind(context.expires_at())
         .bind(context.inventory_signal())
         .bind(context.resolved_endpoint_id().map(|id| id.0))
+        .bind(context.boot_nonce().as_bytes().to_vec())
         .execute(&self.pool)
         .await
         .map_err(|e| RepositoryError::Backend(e.to_string()))?;

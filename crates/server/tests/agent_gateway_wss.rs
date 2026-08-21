@@ -64,7 +64,12 @@ fn build_services(pool: PgPool) -> (BootOrchestration, Arc<Enrollment>) {
 }
 
 async fn issue_e1(boot: &BootOrchestration, signal: &str) -> PresentedCredential {
-    boot.issue_enrollment_credential(signal, Utc::now())
+    // This file proves WSS/Gateway composition, not current-boot persistence
+    // (see `enrollment_lifecycle.rs` for that) — a fresh, discarded
+    // BootNonce is sufficient here.
+    let boot_nonce =
+        bamep_domain::BootNonce::generate().expect("OS CSPRNG must be available in tests");
+    boot.issue_enrollment_credential(signal, boot_nonce, Utc::now())
         .await
         .expect("issuance must succeed")
 }

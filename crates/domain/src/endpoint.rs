@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::credential::CredentialChain;
+use crate::current_boot::CurrentBoot;
 use crate::identity::IdentityState;
 
 /// Durable Endpoint identity: a Server-assigned identifier, independent of
@@ -39,6 +40,14 @@ pub struct EndpointAggregate {
     pub inventory_signal: String,
     pub identity: IdentityState,
     pub credential: CredentialChain,
+    /// The Endpoint's authoritative current-boot projection
+    /// (`m0-trusted-bootstrap-and-server-fingerprint-contract.md`
+    /// "Authoritative current boot and durable Server state"): the fourth
+    /// independent aggregate dimension. `None` means legacy/unknown current
+    /// boot — trusted bootstrap can never be considered established for such
+    /// a row; this is a fail-closed absence, never inferred from identity,
+    /// credential state, or reconnect.
+    pub current_boot: Option<CurrentBoot>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
