@@ -242,6 +242,87 @@ fn non_v4_uuid_in_protocol_id_field_is_rejected() {
 }
 
 // ---------------------------------------------------------------------
+// ProtocolId input hardening: canonical lowercase-hyphenated UUIDv4 only.
+// ---------------------------------------------------------------------
+
+fn auth_request_json_with_message_id(message_id: &str) -> String {
+    format!(
+        r#"{{"type":"AuthRequest","message_id":"{message_id}","protocol_version":"1","timestamp":"2026-08-14T21:00:00Z","credential":"c"}}"#
+    )
+}
+
+#[test]
+fn canonical_lowercase_hyphenated_uuidv4_still_decodes() {
+    let id = ProtocolId::generate();
+    let canonical = id.to_string();
+    assert_eq!(canonical, canonical.to_lowercase());
+    assert!(canonical.contains('-'));
+
+    let json = auth_request_json_with_message_id(&canonical);
+    let decoded = codec::decode(&json).expect("canonical UUIDv4 must decode");
+    match decoded {
+        AgentProtocolMessage::AuthRequest(m) => assert_eq!(m.envelope.message_id, id),
+        other => panic!("wrong variant decoded: {other:?}"),
+    }
+}
+
+#[test]
+fn uppercase_representation_of_a_uuidv4_is_rejected() {
+    let id = ProtocolId::generate();
+    let uppercase = id.to_string().to_uppercase();
+    // Sanity: this fixture must actually differ from the canonical form,
+    // otherwise the test would not exercise the rejection path.
+    assert_ne!(uppercase, id.to_string());
+
+    let json = auth_request_json_with_message_id(&uppercase);
+    let result = codec::decode(&json);
+    assert!(
+        result.is_err(),
+        "uppercase UUIDv4 representation must be rejected, not silently normalized"
+    );
+}
+
+#[test]
+fn non_hyphenated_simple_representation_of_a_uuidv4_is_rejected() {
+    let id = ProtocolId::generate();
+    let simple = id.as_uuid().simple().to_string();
+    assert!(!simple.contains('-'));
+
+    let json = auth_request_json_with_message_id(&simple);
+    let result = codec::decode(&json);
+    assert!(
+        result.is_err(),
+        "non-hyphenated/simple UUIDv4 representation must be rejected"
+    );
+}
+
+#[test]
+fn canonical_non_v4_uuid_remains_rejected() {
+    // Already-canonical (lowercase, hyphenated) but version 1, so only the
+    // version check — not the canonical-form check — should be the reason
+    // for rejection.
+    let non_v4 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+    assert_eq!(non_v4, non_v4.to_lowercase());
+
+    let json = auth_request_json_with_message_id(non_v4);
+    let result = codec::decode(&json);
+    assert!(
+        result.is_err(),
+        "a canonical but non-v4 UUID must still be rejected"
+    );
+}
+
+#[test]
+fn generated_ids_still_serialize_as_lowercase_hyphenated_uuidv4() {
+    let message = AuthRequestMessage::new("cred").with_correlation_id(ProtocolId::generate());
+    let json = codec::encode(&AgentProtocolMessage::AuthRequest(message)).expect("encodes");
+    let value: Value = serde_json::from_str(&json).expect("valid json");
+
+    assert_uuid_v4_string(&value, "message_id");
+    assert_uuid_v4_string(&value, "correlation_id");
+}
+
+// ---------------------------------------------------------------------
 // 9. Optional correlation_id
 // ---------------------------------------------------------------------
 

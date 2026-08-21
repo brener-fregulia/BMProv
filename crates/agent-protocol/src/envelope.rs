@@ -67,20 +67,35 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
     }
 }
 
-/// A syntactically valid UUID that is not version 4, rejected by
-/// [`ProtocolId`]'s `Deserialize` implementation.
+/// Rejects a wire value that fails the Agent Protocol identifier invariant
+/// enforced by [`ProtocolId`]'s `Deserialize` implementation
+/// (`docs/specifications/m0-agent-protocol-contract.md` "Wire encoding":
+/// "UUID (version 4) represented as a lowercase hyphenated string").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("protocol identifier is not a version-4 UUID")]
-pub struct NotUuidV4;
+pub enum ProtocolIdError {
+    /// Syntactically valid UUID, but not version 4.
+    #[error("protocol identifier is not a version-4 UUID")]
+    NotUuidV4,
+    /// A valid version-4 UUID, but its textual form is not exactly the
+    /// canonical lowercase-hyphenated representation (e.g. uppercase hex, a
+    /// non-hyphenated/simple form, or a braced/urn form).
+    #[error("protocol identifier is not the canonical lowercase-hyphenated UUID representation")]
+    NonCanonicalRepresentation,
+}
 
 /// A `message_id` / `session_id` / `correlation_id` (and, in future
-/// checkpoints, `action_id`) wire identifier: UUID version 4, encoded as a
-/// lowercase hyphenated string
+/// checkpoints, `action_id`) wire identifier: UUID version 4, encoded as the
+/// canonical lowercase hyphenated string
 /// (`docs/specifications/m0-agent-protocol-contract.md` "Wire encoding").
 ///
-/// Generation always produces a v4 UUID; deserialization rejects a
-/// syntactically valid UUID of any other version, rather than silently
-/// accepting it.
+/// Generation always produces a v4 UUID, serialized in canonical form.
+/// Deserialization enforces the full wire invariant on *input*, not only on
+/// output: the value must (1) be a syntactically valid UUID, (2) be version
+/// 4, and (3) equal — byte-for-byte — the canonical lowercase-hyphenated
+/// textual representation of that UUID. A syntactically valid UUID accepted
+/// by a permissive parser but expressed in a non-canonical form (uppercase
+/// hex, a non-hyphenated/simple representation, a braced/urn form, etc.) is
+/// rejected explicitly rather than silently normalized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProtocolId(Uuid);
 
@@ -90,9 +105,12 @@ impl ProtocolId {
     }
 
     /// Wraps an already-known UUID, rejecting anything that is not version 4.
-    pub fn from_uuid(uuid: Uuid) -> Result<Self, NotUuidV4> {
+    /// This accepts a parsed [`Uuid`], so it has no textual form to compare
+    /// against — the canonical-representation check only applies to
+    /// [`Deserialize`], which starts from wire text.
+    pub fn from_uuid(uuid: Uuid) -> Result<Self, ProtocolIdError> {
         if uuid.get_version_num() != 4 {
-            return Err(NotUuidV4);
+            return Err(ProtocolIdError::NotUuidV4);
         }
         Ok(Self(uuid))
     }
@@ -118,7 +136,18 @@ impl<'de> Deserialize<'de> for ProtocolId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
         let uuid = Uuid::parse_str(&raw).map_err(D::Error::custom)?;
-        ProtocolId::from_uuid(uuid).map_err(D::Error::custom)
+        let id = ProtocolId::from_uuid(uuid).map_err(D::Error::custom)?;
+        // `Uuid`'s `Display` always renders the canonical lowercase
+        // hyphenated form, so a straight string comparison against the
+        // original wire text is exactly the "canonical representation"
+        // check — anything a permissive parser accepted but that isn't
+        // already in that exact form differs here and is rejected.
+        if raw != id.0.to_string() {
+            return Err(D::Error::custom(
+                ProtocolIdError::NonCanonicalRepresentation,
+            ));
+        }
+        Ok(id)
     }
 }
 
@@ -127,8 +156,12 @@ impl<'de> Deserialize<'de> for ProtocolId {
 /// (`docs/specifications/m0-agent-protocol-contract.md` "Wire encoding").
 ///
 /// Serializes with a `Z` UTC designator (e.g. `2026-08-14T21:00:00Z`), not
-/// `+00:00`, matching the Specification's own example. Deserialization
-/// accepts any valid RFC 3339 string and normalizes it to UTC.
+/// `+00:00` — the Specification's own example uses `Z`. Millisecond
+/// sub-second precision is this implementation's own formatting choice, not
+/// itself a Specification requirement: the Specification requires an RFC
+/// 3339 UTC string and does not mandate (or forbid) any particular
+/// sub-second precision. Deserialization accepts any valid RFC 3339 string
+/// and normalizes it to UTC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageTimestamp(DateTime<Utc>);
 

@@ -20,7 +20,7 @@ pub mod envelope;
 pub mod messages;
 
 pub use codec::{decode, encode, DecodeError, EncodeError};
-pub use envelope::{Envelope, MessageTimestamp, NotUuidV4, ProtocolId, ProtocolVersion};
+pub use envelope::{Envelope, MessageTimestamp, ProtocolId, ProtocolIdError, ProtocolVersion};
 pub use messages::{
     AgentProtocolMessage, AuthErrorBody, AuthErrorMessage, AuthRequestBody, AuthRequestMessage,
     BootstrapEvidenceBody, BootstrapEvidenceMessage, LocalBootTrust, SessionEstablishedBody,
