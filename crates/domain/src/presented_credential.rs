@@ -98,7 +98,7 @@ impl CredentialKind {
 ///
 /// Non-secret: safe to log, index, and derive `Debug` for. Possession of a
 /// lookup identifier alone never authenticates anything (ADR-0014 point 7).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CredentialLookupId([u8; LOOKUP_ID_LEN]);
 
 impl CredentialLookupId {
@@ -149,8 +149,7 @@ impl fmt::Debug for CredentialLookupId {
 }
 
 /// High-entropy secret material carried by a presented credential (ADR-0014
-/// point 2/3). 32 bytes of secure random data, generated the same way the
-/// existing transitional `CredentialSecret` is (`credential::CredentialSecret::generate`).
+/// point 2/3). 32 bytes of secure random data from the OS CSPRNG.
 ///
 /// Never derives `Debug`/`Display` — those would print the raw secret bytes
 /// through ordinary logging or `{:?}` formatting. Use

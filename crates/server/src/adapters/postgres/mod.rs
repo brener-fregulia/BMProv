@@ -8,9 +8,12 @@
 //! `boot_context_repository.rs`.
 
 mod boot_context_repository;
+mod credential_redemption_repository;
 mod repository;
+mod shared;
 
 pub use boot_context_repository::PostgresBootContextRepository;
+pub use credential_redemption_repository::PostgresCredentialRedemptionRepository;
 pub use repository::PostgresEndpointRepository;
 
 use sqlx::postgres::PgPoolOptions;

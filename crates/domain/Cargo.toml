@@ -10,7 +10,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 serde = { version = "1", features = ["derive"] }
 rand = "0.8"
 sha2 = "0.10"
-hmac = "0.12"
 base64 = "0.22"
 subtle = "2"
 thiserror = "1"

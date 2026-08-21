@@ -17,9 +17,7 @@ pub mod presented_credential;
 pub mod transitions;
 
 pub use boot_context::{BootContext, BootContextResolveError};
-pub use credential::{
-    AuthOutcome, CredentialChain, CredentialDimension, CredentialSecret, DEFAULT_CREDENTIAL_TTL,
-};
+pub use credential::{AuthOutcome, CredentialChain, CredentialDimension, DEFAULT_CREDENTIAL_TTL};
 pub use endpoint::{EndpointAggregate, EndpointId};
 pub use events::{Actor, AuditRecord, DomainEvent, TransitionOutcome};
 pub use identity::{IdentityState, InvalidIdentityTransition};
