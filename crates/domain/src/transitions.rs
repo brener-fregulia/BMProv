@@ -199,6 +199,16 @@ pub fn redeem_known(
 /// "Reconnect / credential renewal handling"). No domain event is emitted,
 /// for the same reason routine rotation emits none (ADR-0012 point 9).
 ///
+/// `context` must be unresolved, exactly like [`first_contact`]: an
+/// already-resolved `BootContext` is no longer eligible for this transition
+/// (ADR-0014) and is rejected before any credential validation runs — the
+/// normal retry path for an already-resolved `BootContext` is Adapter
+/// routing to the persisted Endpoint and [`redeem_known`], not this
+/// function. `BootContext::resolve`'s idempotence for the same Endpoint does
+/// not substitute for this check: without it, a retried, already-resolved
+/// context would still re-establish (and re-persist) a fresh chain on every
+/// call.
+///
 /// Rejects outright — without attempting to establish anything — when
 /// `candidate`'s current chain is `CredentialRevoked`: `CredentialRevoked` is
 /// durable Endpoint-level state that survives a genuine reboot, and a fresh
@@ -216,6 +226,15 @@ pub fn genuine_reboot(
     now: DateTime<Utc>,
     ttl: Duration,
 ) -> Result<RedeemOutcome, BootContextResolveError> {
+    if context.resolved_endpoint_id().is_some() {
+        // Not a resolution conflict: an already-resolved BootContext is
+        // simply no longer eligible for this transition (ADR-0014). Retry
+        // authenticates against the persisted promoted chain instead —
+        // `BootContext::resolve`'s idempotence for the same Endpoint is
+        // insufficient by itself to enforce that here, since it would
+        // silently re-accept and re-establish a fresh chain on every retry.
+        return Ok(RedeemOutcome::Rejected);
+    }
     if !boot_context_credential_is_valid(context, presented, now) {
         return Ok(RedeemOutcome::Rejected);
     }
@@ -555,6 +574,60 @@ mod tests {
                 DEFAULT_CREDENTIAL_TTL
             ),
             AuthOutcome::Rejected
+        );
+    }
+
+    #[test]
+    fn genuine_reboot_rejects_an_already_resolved_boot_context() {
+        let (context1, e1) = issue_boot_context("mac:AA:BB", now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            &context1,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let candidate = first.endpoint.clone();
+        let pre_attempt_chain = candidate.credential.clone();
+
+        // A second BootContext for a genuine reboot, but already resolved to
+        // the candidate Endpoint — e.g. a retried AuthRequest for an E2 that
+        // already completed a genuine reboot once. This must no longer be
+        // eligible for this transition: the normal retry path is Adapter
+        // routing to the persisted Endpoint and `redeem_known`, not another
+        // call to `genuine_reboot`.
+        let (context2, e2) = issue_boot_context("mac:AA:BB", now(), Duration::minutes(5));
+        let already_resolved = context2.resolve(candidate.id).unwrap();
+
+        let outcome = genuine_reboot(
+            &already_resolved,
+            &candidate,
+            &e2,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .expect("an already-resolved BootContext is a rejection, never a resolve conflict");
+
+        assert!(matches!(outcome, RedeemOutcome::Rejected));
+
+        // No fresh chain was established: the candidate's credential chain
+        // (from the original first contact) is untouched by this rejected
+        // attempt.
+        assert_eq!(candidate.credential, pre_attempt_chain);
+        assert_eq!(
+            credential::authenticate(
+                &candidate.credential,
+                &e2,
+                &fresh_runtime(),
+                now(),
+                DEFAULT_CREDENTIAL_TTL
+            ),
+            AuthOutcome::Rejected,
+            "the rejected E2 must not have become a valid predecessor"
         );
     }
 
