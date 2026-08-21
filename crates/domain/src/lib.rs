@@ -8,6 +8,7 @@
 //! state plus the domain events/audit record it requires, leaving
 //! persistence entirely to the `server` crate's Adapters.
 
+pub mod boot_context;
 pub mod credential;
 pub mod endpoint;
 pub mod events;
@@ -15,6 +16,7 @@ pub mod identity;
 pub mod presented_credential;
 pub mod transitions;
 
+pub use boot_context::BootContext;
 pub use credential::{
     AuthOutcome, CredentialChain, CredentialDimension, CredentialSecret, DEFAULT_CREDENTIAL_TTL,
 };

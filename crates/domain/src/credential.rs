@@ -45,24 +45,40 @@ pub struct CredentialHash {
 
 impl CredentialHash {
     fn of(secret: &CredentialSecret) -> Self {
-        let mut salt = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
-        Self::of_with_salt(secret, salt)
-    }
-
-    fn of_with_salt(secret: &CredentialSecret, salt: [u8; 16]) -> Self {
-        use sha2::Digest;
-        let mut hasher = Sha256::new();
-        hasher.update(salt);
-        hasher.update(secret.0.as_bytes());
-        let digest: [u8; 32] = hasher.finalize().into();
-        Self { salt, digest }
+        Self::of_bytes(secret.0.as_bytes())
     }
 
     /// Constant-time verification, so timing does not leak how many bytes of
     /// a guessed secret matched.
     fn verify(&self, secret: &CredentialSecret) -> bool {
-        let candidate = Self::of_with_salt(secret, self.salt);
+        self.verify_bytes(secret.0.as_bytes())
+    }
+
+    /// Byte-oriented one-way verifier construction (ADR-0014 point 4): hashes
+    /// the actual secret bytes directly, with no intermediate text encoding.
+    /// For a secret representation that is not itself text (e.g.
+    /// `PresentedCredentialSecret`'s raw bytes), this avoids the pointless
+    /// round-trip through base64 that wrapping it in the transitional
+    /// [`CredentialSecret`] would require.
+    pub fn of_bytes(secret_bytes: &[u8]) -> Self {
+        let mut salt = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut salt);
+        Self::of_bytes_with_salt(secret_bytes, salt)
+    }
+
+    fn of_bytes_with_salt(secret_bytes: &[u8], salt: [u8; 16]) -> Self {
+        use sha2::Digest;
+        let mut hasher = Sha256::new();
+        hasher.update(salt);
+        hasher.update(secret_bytes);
+        let digest: [u8; 32] = hasher.finalize().into();
+        Self { salt, digest }
+    }
+
+    /// Constant-time verification against raw secret bytes, so timing does
+    /// not leak how many bytes of a guessed secret matched.
+    pub fn verify_bytes(&self, secret_bytes: &[u8]) -> bool {
+        let candidate = Self::of_bytes_with_salt(secret_bytes, self.salt);
         candidate.digest.ct_eq(&self.digest).into()
     }
 

@@ -122,6 +122,22 @@ impl CredentialLookupId {
             .map_err(|_| PresentedCredentialParseError::InvalidLookupIdLength)?;
         Ok(Self(bytes))
     }
+
+    /// Opaque raw-byte representation for relational persistence (e.g.
+    /// PostgreSQL `BYTEA`), analogous to [`CredentialHash::to_bytes`](crate::credential::CredentialHash::to_bytes).
+    /// The wire encoding (`to_wire`, base64url) is unrelated and unaffected —
+    /// this accessor exists only for a relational Adapter to bind/decompose a
+    /// lookup identifier as a fixed-size byte array.
+    pub fn to_bytes(&self) -> [u8; LOOKUP_ID_LEN] {
+        self.0
+    }
+
+    /// Reconstructs a lookup identifier from its durable byte representation
+    /// (`to_bytes`). Adapter-facing only: a relational Adapter reloading a
+    /// previously persisted value is the only legitimate caller.
+    pub fn from_bytes(bytes: [u8; LOOKUP_ID_LEN]) -> Self {
+        Self(bytes)
+    }
 }
 
 impl fmt::Debug for CredentialLookupId {
@@ -140,7 +156,16 @@ impl fmt::Debug for CredentialLookupId {
 /// through ordinary logging or `{:?}` formatting. Use
 /// [`PresentedCredential::to_wire_value`] as the one deliberate
 /// serialization boundary instead.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Deliberately does not derive `PartialEq`/`Eq`: this is the
+/// production-facing plaintext secret representation, and an ordinary
+/// equality comparison is not a constant-time operation. Authentication must
+/// go through a one-way verifier (e.g.
+/// [`CredentialHash::verify_bytes`](crate::credential::CredentialHash::verify_bytes)),
+/// never `==`. A test that needs to confirm round-trip preservation should
+/// compare `expose_secret_bytes()` explicitly, which is assertion
+/// inspection, not an authentication path.
+#[derive(Clone)]
 pub struct PresentedCredentialSecret([u8; SECRET_LEN]);
 
 impl PresentedCredentialSecret {
@@ -215,7 +240,11 @@ pub enum PresentedCredentialParseError {
 /// checkpoint without exposing or depending on the secret to do so, and
 /// keeps the secret available separately for that same future checkpoint's
 /// one-way verification step.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// Deliberately does not derive `PartialEq`/`Eq`: it carries
+/// [`PresentedCredentialSecret`], which does not derive them either (see
+/// that type's documentation).
+#[derive(Clone)]
 pub struct PresentedCredential {
     kind: CredentialKind,
     lookup_id: CredentialLookupId,
@@ -307,7 +336,10 @@ mod tests {
         let parsed = PresentedCredential::parse(&wire).expect("must parse");
         assert_eq!(parsed.kind(), CredentialKind::Enrollment);
         assert_eq!(parsed.lookup_id(), credential.lookup_id());
-        assert_eq!(parsed.secret(), credential.secret());
+        assert_eq!(
+            parsed.secret().expose_secret_bytes(),
+            credential.secret().expose_secret_bytes()
+        );
     }
 
     #[test]
@@ -317,7 +349,10 @@ mod tests {
         let parsed = PresentedCredential::parse(&wire).expect("must parse");
         assert_eq!(parsed.kind(), CredentialKind::Runtime);
         assert_eq!(parsed.lookup_id(), credential.lookup_id());
-        assert_eq!(parsed.secret(), credential.secret());
+        assert_eq!(
+            parsed.secret().expose_secret_bytes(),
+            credential.secret().expose_secret_bytes()
+        );
     }
 
     #[test]
@@ -340,14 +375,17 @@ mod tests {
         let a = PresentedCredential::generate(CredentialKind::Runtime);
         let b = PresentedCredential::generate(CredentialKind::Runtime);
         assert_ne!(a.lookup_id(), b.lookup_id());
-        assert_ne!(a.secret(), b.secret());
+        assert_ne!(
+            a.secret().expose_secret_bytes(),
+            b.secret().expose_secret_bytes()
+        );
     }
 
     #[test]
     fn malformed_wire_value_missing_segments_rejected() {
         assert_eq!(
-            PresentedCredential::parse("v1.runtime.onlyonefield"),
-            Err(PresentedCredentialParseError::MalformedStructure)
+            PresentedCredential::parse("v1.runtime.onlyonefield").unwrap_err(),
+            PresentedCredentialParseError::MalformedStructure
         );
     }
 
@@ -356,16 +394,16 @@ mod tests {
         let credential = PresentedCredential::generate(CredentialKind::Runtime);
         let extra = format!("{}.unexpected", credential.to_wire_value());
         assert_eq!(
-            PresentedCredential::parse(&extra),
-            Err(PresentedCredentialParseError::MalformedStructure)
+            PresentedCredential::parse(&extra).unwrap_err(),
+            PresentedCredentialParseError::MalformedStructure
         );
     }
 
     #[test]
     fn empty_wire_value_rejected() {
         assert_eq!(
-            PresentedCredential::parse(""),
-            Err(PresentedCredentialParseError::MalformedStructure)
+            PresentedCredential::parse("").unwrap_err(),
+            PresentedCredentialParseError::MalformedStructure
         );
     }
 
@@ -381,8 +419,8 @@ mod tests {
         // empty-last-field string for the assertion below to be meaningful.
         assert_eq!(with_empty_secret.split('.').count(), 4);
         assert_eq!(
-            PresentedCredential::parse(&with_empty_secret),
-            Err(PresentedCredentialParseError::MalformedStructure)
+            PresentedCredential::parse(&with_empty_secret).unwrap_err(),
+            PresentedCredentialParseError::MalformedStructure
         );
     }
 
@@ -392,8 +430,8 @@ mod tests {
         let wire = credential.to_wire_value();
         let tampered = wire.replacen("v1.", "v2.", 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::UnsupportedVersion)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::UnsupportedVersion
         );
     }
 
@@ -403,8 +441,8 @@ mod tests {
         let wire = credential.to_wire_value();
         let tampered = wire.replacen(".runtime.", ".bogus.", 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::UnknownKind)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::UnknownKind
         );
     }
 
@@ -415,8 +453,8 @@ mod tests {
         let wire = credential.to_wire_value();
         let tampered = wire.replacen(&lookup_id_wire, "not!valid!base64", 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::InvalidLookupIdEncoding)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::InvalidLookupIdEncoding
         );
     }
 
@@ -429,8 +467,8 @@ mod tests {
         let short = URL_SAFE_NO_PAD.encode([0u8; 8]);
         let tampered = wire.replacen(&lookup_id_wire, &short, 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::InvalidLookupIdLength)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::InvalidLookupIdLength
         );
     }
 
@@ -441,8 +479,8 @@ mod tests {
         let wire = credential.to_wire_value();
         let tampered = wire.replacen(&secret_wire, "not!valid!base64", 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::InvalidSecretEncoding)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::InvalidSecretEncoding
         );
     }
 
@@ -455,9 +493,18 @@ mod tests {
         let short = URL_SAFE_NO_PAD.encode([0u8; 16]);
         let tampered = wire.replacen(&secret_wire, &short, 1);
         assert_eq!(
-            PresentedCredential::parse(&tampered),
-            Err(PresentedCredentialParseError::InvalidSecretLength)
+            PresentedCredential::parse(&tampered).unwrap_err(),
+            PresentedCredentialParseError::InvalidSecretLength
         );
+    }
+
+    #[test]
+    fn lookup_id_byte_round_trip_preserves_value() {
+        let original = CredentialLookupId::generate();
+        let bytes = original.to_bytes();
+        let reconstructed = CredentialLookupId::from_bytes(bytes);
+        assert_eq!(original, reconstructed);
+        assert_eq!(reconstructed.to_bytes(), bytes);
     }
 
     #[test]
