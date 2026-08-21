@@ -20,7 +20,8 @@
 
 use async_trait::async_trait;
 use bamep_domain::{
-    EndpointAggregate, EndpointId, InvalidIdentityTransition, RedeemOutcome, TransitionOutcome,
+    BootContext, EndpointAggregate, EndpointId, InvalidIdentityTransition, RedeemOutcome,
+    TransitionOutcome,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -89,4 +90,25 @@ pub trait EndpointRepository: Send + Sync {
         id: EndpointId,
         decide: UpdateDecision,
     ) -> Result<TransitionOutcome, EndpointUpdateError>;
+}
+
+/// Persistence for newly issued `BootContext`s (ADR-0014 point 11
+/// "Persist-before-deliver issuance ordering"). Kept as its own narrow Port,
+/// separate from [`EndpointRepository`]: BootContext issuance is not an
+/// Endpoint aggregate operation — no Endpoint exists yet for an unresolved
+/// enrollment credential. Redemption/routing against a `BootContext` (ADR-0014
+/// points 5, 7, 8) is not covered by this Port and remains a later
+/// checkpoint.
+#[async_trait]
+pub trait BootContextRepository: Send + Sync {
+    /// Durably inserts a newly issued, not-yet-persisted `BootContext`. A
+    /// successful return means the row has committed — the caller (a future
+    /// Application issuance sequence) may then deliver the enrollment
+    /// credential to the booting Endpoint, per the persist-before-deliver
+    /// ordering this Port exists to support.
+    ///
+    /// Rejects, rather than overwrites, a `boot_context_id` that already
+    /// exists: `boot_context_id` is randomly generated per issuance, so a
+    /// collision indicates a caller error, not a legitimate re-issuance.
+    async fn insert_boot_context(&self, context: &BootContext) -> Result<(), RepositoryError>;
 }
