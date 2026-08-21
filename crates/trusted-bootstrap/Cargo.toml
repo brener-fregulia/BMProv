@@ -1,0 +1,22 @@
+[package]
+name = "bamep-trusted-bootstrap"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bamep_trusted_bootstrap"
+path = "src/lib.rs"
+
+[dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = { version = "0.2", features = ["std"] }
+thiserror = "1"
+
+[dev-dependencies]
+bamep-trusted-bootstrap = { path = ".", features = ["fixture-signing"] }
+
+[features]
+fixture-signing = []

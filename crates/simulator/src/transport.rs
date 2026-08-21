@@ -15,8 +15,8 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::WebSocketStream;
 
-use crate::fingerprint::ServerCertFingerprint;
 use crate::verifier::PinnedServerCertVerifier;
+use bamep_trusted_bootstrap::ServerCertFingerprint;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SimulatorTransportError {

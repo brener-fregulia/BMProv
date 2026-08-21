@@ -9,8 +9,14 @@
 //!
 //! A fingerprint is not a secret, so ordinary equality is sufficient — no
 //! algorithm enum, and no textual (hex/base64) internal representation.
+//!
+//! Moved here from `bamep-simulator` (`m0-trusted-bootstrap-and-server-
+//! fingerprint-contract.md` "Shared contract implementation boundary");
+//! reimplemented over `sha2` instead of `ring` so this crate does not couple
+//! to rustls's `ring` `CryptoProvider`. The algorithm/output semantics are
+//! byte-identical to the prior implementation.
 
-use ring::digest::{digest, SHA256};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ServerCertFingerprint {
@@ -23,9 +29,10 @@ impl ServerCertFingerprint {
     /// actually presents, and for deriving test-fixture pins from generated
     /// certificates.
     pub fn from_leaf_der(der: &[u8]) -> Self {
-        let computed = digest(&SHA256, der);
+        let mut hasher = Sha256::new();
+        hasher.update(der);
         let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(computed.as_ref());
+        bytes.copy_from_slice(hasher.finalize().as_slice());
         Self { digest: bytes }
     }
 

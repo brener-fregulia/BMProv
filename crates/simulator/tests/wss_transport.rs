@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use bamep_agent_protocol::{decode, encode, AgentProtocolMessage, AuthRequestMessage};
 use bamep_server::adapters::agent_transport::AgentTransportAcceptor;
-use bamep_simulator::{connect_pinned_wss, ServerCertFingerprint};
+use bamep_simulator::connect_pinned_wss;
+use bamep_trusted_bootstrap::ServerCertFingerprint;
 use futures_util::{SinkExt, StreamExt};
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};

@@ -20,7 +20,7 @@ use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvi
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 
-use crate::fingerprint::ServerCertFingerprint;
+use bamep_trusted_bootstrap::ServerCertFingerprint;
 
 /// Verifies the Server's presented leaf certificate against a single
 /// authenticated expected [`ServerCertFingerprint`]. `server_name`/SNI is
