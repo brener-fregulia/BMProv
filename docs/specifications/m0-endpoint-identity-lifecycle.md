@@ -15,16 +15,22 @@ Operator-approval-gated first enrollment is the accepted M0 default (ADR-0004): 
 
 ## State dimensions
 
-An Endpoint's trust and operational readiness are governed by **three independent, Endpoint-owned state dimensions**, not one mutually exclusive machine. An earlier draft of this Specification collapsed persistent identity, credential/session validity, and hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal` state alongside `CredentialActive`); that conflated concerns that legitimately coexist — an `Enrolled` Endpoint can simultaneously have an expired credential and lowered hardware confidence, and forcing that into one mutually exclusive machine would make the combination unrepresentable or misleading. The three dimensions below may combine freely.
+An Endpoint's trust and operational readiness are governed by **four independent
+Endpoint aggregate dimensions**, not one mutually exclusive machine. An earlier draft
+of this Specification collapsed persistent identity, credential/session validity, and
+hardware-signal confidence into a single state list (e.g., a `StaleHardwareSignal`
+state alongside `CredentialActive`); that conflated concerns that legitimately coexist
+— an `Enrolled` Endpoint can simultaneously have an expired credential and lowered
+hardware confidence, and forcing that into one mutually exclusive machine would make
+the combination unrepresentable or misleading.
 
-These three dimensions are facts *about the Endpoint identity record itself*.
-`trusted bootstrap established` (`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`;
-destructive-operation precondition 7 below) remains a different kind of fact — a
-security property of the Endpoint's **current boot context**, not an identity-
-lifecycle state. It is nevertheless represented as a fourth independent durable
-Endpoint aggregate dimension through the authoritative current-boot projection
-defined below. Identity/enrollment, credential, hardware confidence, and current-boot
-trusted-bootstrap state must never be inferred from one another.
+The first three dimensions below are facts *about the Endpoint identity record and its
+lifecycle*. The fourth, `trusted bootstrap established`
+(`docs/decisions/0010-trusted-bootstrap-and-secure-boot-baseline.md`;
+destructive-operation precondition 7 below), is a different kind of fact: a durable
+security property of the Endpoint's **current boot context**, not an identity-lifecycle
+state. It is represented through the authoritative current-boot projection defined
+below. All four dimensions may combine freely, and none may be inferred from another.
 
 ### 1. Endpoint identity lifecycle (persistent record)
 
@@ -90,7 +96,7 @@ Full reasoning and rejected alternatives: ADR-0012.
 - **LoweredConfidence** — a hardware change was observed (e.g., one of several NICs replaced) that requires surfacing for operator review, but that does not by itself indicate the Endpoint is a different physical device. Permits normal connection, authentication (when otherwise valid), credential/session renewal, and non-destructive inventory or diagnostic activity. **Blocks destructive execution** (see precondition 6 below) until the confidence issue is resolved through operator review or explicit revalidation.
 - **Conflict** — a discrepancy serious enough that continuity of the trusted identity cannot be assumed. Blocks destructive operations (see precondition 6 below), and — unlike `LoweredConfidence` — is treated as breaking continuity for reconnect/renewal purposes as well (see "Reconnect / credential renewal handling").
 
-This dimension can change at any time based on newly observed inventory signals, independent of the other two dimensions. It is resolved back to `Consistent` only through explicit operator review/confirmation or explicit revalidation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict`, and the exact mechanics of "explicit revalidation," are implementation-time policy, intentionally not decided here (see "Open questions").
+This dimension can change at any time based on newly observed inventory signals, independent of all other aggregate dimensions, including current-boot trusted-bootstrap state. It is resolved back to `Consistent` only through explicit operator review/confirmation or explicit revalidation — never automatically. The exact thresholds distinguishing a "significant" hardware change (`LoweredConfidence`) from a `Conflict`, and the exact mechanics of "explicit revalidation," are implementation-time policy, intentionally not decided here (see "Open questions").
 
 ### 4. Authoritative current-boot trusted-bootstrap state
 
