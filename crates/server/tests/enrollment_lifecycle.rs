@@ -103,7 +103,9 @@ async fn migrations_apply_cleanly_to_a_fresh_database() {
         tables,
         vec![
             "audit_records",
+            "boot_contexts",
             "domain_events",
+            "endpoint_credential_lookups",
             "endpoint_credentials",
             "endpoints",
         ]

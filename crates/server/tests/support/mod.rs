@@ -14,6 +14,12 @@
 //! credential is hardcoded; every database this harness creates or drops
 //! carries the `bamep_wp1_test_` prefix it generates itself, so teardown
 //! never touches a database this harness did not itself create.
+//!
+//! Shared across multiple `tests/*.rs` integration-test binaries, each
+//! compiled separately: an item unused by one particular binary (e.g. a
+//! schema-only test file that never advances a clock) is not dead code in
+//! the module as a whole.
+#![allow(dead_code)]
 
 use std::sync::Mutex;
 
