@@ -10,7 +10,7 @@
 //! fingerprint `EstablishedTrustedBootstrap` supplies.
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::task::{Context, Poll, Waker};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
@@ -34,17 +34,25 @@ fn generate_test_cert(subject_alt_name: &str) -> (CertificateDer<'static>, Priva
     (cert_der, key_der)
 }
 
-/// Deterministic structural proof that zero TCP connection was ever queued:
-/// nothing in this test suite ever dials `listener`'s address, so a bounded
-/// `accept()` must time out. The timeout is only a watchdog around the
-/// necessarily-never-resolving `accept()` future, not the pass condition
-/// itself — the pass condition is that no connection exists.
-async fn assert_zero_tcp_connections(listener: TcpListener) {
-    let accept_result = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
-    assert!(
-        accept_result.is_err(),
-        "no TCP connection may ever be queued when local trusted-bootstrap establishment fails first"
-    );
+/// Deterministic, immediate, non-blocking proof that zero TCP connection was
+/// ever queued on `listener`. `tokio::net::TcpListener` exposes no
+/// `try_accept`; the exact equivalent is a single `poll_accept` against a
+/// no-op waker — `Poll::Pending` is precisely the non-blocking-accept
+/// `WouldBlock` case, i.e. no connection is queued. No sleep, no timeout,
+/// no background task: this is a synchronous, one-shot check.
+fn assert_zero_tcp_connections(listener: &TcpListener) {
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    match listener.poll_accept(&mut cx) {
+        Poll::Pending => {}
+        Poll::Ready(Ok((_stream, peer))) => panic!(
+            "a TCP connection from {peer} was queued, but local trusted-bootstrap \
+             establishment must fail before any TCP connection is attempted"
+        ),
+        Poll::Ready(Err(err)) => {
+            panic!("unexpected I/O error while checking for a queued TCP connection: {err}")
+        }
+    }
 }
 
 #[tokio::test]
@@ -76,7 +84,7 @@ async fn wrong_signer_fails_before_tcp() {
         ),
     }
 
-    assert_zero_tcp_connections(listener).await;
+    assert_zero_tcp_connections(&listener);
 }
 
 #[tokio::test]
@@ -112,7 +120,7 @@ async fn corrupted_signature_fails_before_tcp() {
         Ok(_) => panic!("expected local verification to reject the corrupted signature, but establishment succeeded"),
     }
 
-    assert_zero_tcp_connections(listener).await;
+    assert_zero_tcp_connections(&listener);
 }
 
 #[tokio::test]
@@ -148,7 +156,7 @@ async fn nonce_mismatch_replay_fails_before_tcp() {
         Ok(_) => panic!("expected local establishment to reject the replayed old-nonce assertion, but establishment succeeded"),
     }
 
-    assert_zero_tcp_connections(listener).await;
+    assert_zero_tcp_connections(&listener);
 }
 
 #[tokio::test]
