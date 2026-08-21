@@ -1,0 +1,240 @@
+//! Agent Control Gateway: Agent Protocol v1 handshake semantics over an
+//! already-established WebSocket (`docs/specifications/m0-agent-protocol-contract.md`
+//! "Transport and handshake", "Runtime credential issuance and rotation").
+//!
+//! Boundary (Issue #17 WP1 handshake checkpoint): `agent_transport` owns
+//! TCP/TLS/WebSocket establishment; this module owns only what happens on the
+//! Agent Protocol JSON stream once that WebSocket already exists —
+//! `AuthRequest` -> `EnrollmentService::redeem` -> `SessionEstablished`/
+//! `AuthError`. It never touches TLS/fingerprint verification (already
+//! complete by the time [`AgentControlGateway::handshake`] is called), never
+//! contains SQL, and never re-derives a Domain/Application decision — every
+//! accept/reject decision is exactly the one `EnrollmentService::redeem`
+//! already made.
+//!
+//! `BootstrapEvidence` processing (verification, trusted-bootstrap state)
+//! belongs to a later checkpoint: this module only proves that a phase-
+//! invalid message — including `BootstrapEvidence` sent before `AuthRequest`
+//! — is rejected during the handshake, per "Phase validation" below.
+
+use std::sync::Arc;
+
+use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
+
+use bamep_agent_protocol::{
+    decode, encode, AgentProtocolMessage, AuthErrorMessage, AuthRequestMessage, MessageTimestamp,
+    ProtocolId, SessionEstablishedMessage,
+};
+use bamep_domain::EndpointId;
+
+use crate::application::{ApplicationError, EnrollmentService, RedeemResult};
+use crate::ports::{CredentialRedemptionRepository, EndpointRepository};
+
+/// Agent Protocol v1 currently defines no richer closed `AuthError` reason
+/// taxonomy (`m0-agent-protocol-contract.md` "Runtime credential issuance and
+/// rotation": "a generic authentication rejection is sufficient"). Every
+/// handshake rejection in this checkpoint — malformed message, wrong-phase
+/// message, incompatible `protocol_version`, or a rejected credential — uses
+/// this single value. Callers must never encode parser/serde/Application
+/// detail into a richer reason.
+const GENERIC_AUTH_ERROR_REASON: &str = "rejected";
+
+/// The result of a successful Agent Protocol v1 handshake. `session_id` is a
+/// fresh, transient value — not persisted to PostgreSQL in WP1 (no session
+/// repository/table exists).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthenticatedSession {
+    pub endpoint_id: EndpointId,
+    pub session_id: ProtocolId,
+}
+
+/// Distinguishes an expected Agent Protocol/authentication rejection from a
+/// genuine Server/transport failure ([`AgentGatewayError`]). A rejection is
+/// terminal for the handshake attempt that produced it: the caller drops the
+/// connection rather than accepting a further `AuthRequest` as a silent retry.
+#[derive(Debug)]
+pub enum HandshakeOutcome {
+    Established(AuthenticatedSession),
+    Rejected,
+}
+
+/// Genuine Gateway/transport/Application processing failures — never an
+/// expected protocol/authentication rejection, which is
+/// [`HandshakeOutcome::Rejected`] instead.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentGatewayError {
+    #[error("failed to receive a WebSocket frame during the handshake")]
+    Receive(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("failed to send a WebSocket frame during the handshake")]
+    Send(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("the connection closed before the handshake completed")]
+    ConnectionClosed,
+    #[error(transparent)]
+    Application(#[from] ApplicationError),
+}
+
+/// Holds the real [`EnrollmentService`] and drives one Agent Protocol v1
+/// handshake per call. `Arc`-shared so one Gateway/`EnrollmentService` pair
+/// serves many concurrent connections, consistent with `EnrollmentService`
+/// itself already wrapping its repositories in `Arc`. Stateless across calls
+/// beyond that shared reference: nothing about a rejected or completed
+/// handshake is retained here.
+pub struct AgentControlGateway<R: EndpointRepository, C: CredentialRedemptionRepository> {
+    enrollment: Arc<EnrollmentService<R, C>>,
+}
+
+impl<R: EndpointRepository, C: CredentialRedemptionRepository> AgentControlGateway<R, C> {
+    pub fn new(enrollment: Arc<EnrollmentService<R, C>>) -> Self {
+        Self { enrollment }
+    }
+
+    /// Drives the Agent Protocol v1 handshake phase on an already-established
+    /// WebSocket. Borrows `websocket` rather than consuming it: on
+    /// [`HandshakeOutcome::Established`], the caller retains the same open
+    /// connection for the next checkpoint (`BootstrapEvidence`) — this method
+    /// never closes it and never reads past `SessionEstablished`.
+    pub async fn handshake<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+    ) -> Result<HandshakeOutcome, AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        loop {
+            let frame = websocket
+                .next()
+                .await
+                .ok_or(AgentGatewayError::ConnectionClosed)?
+                .map_err(AgentGatewayError::Receive)?;
+
+            match frame {
+                Message::Text(text) => return self.handle_text(websocket, text.as_str()).await,
+                // Agent Protocol v1 is UTF-8 JSON in TEXT frames only
+                // (`m0-agent-protocol-contract.md` "Wire encoding") — a
+                // binary payload during the handshake is rejected outright,
+                // never decoded.
+                Message::Binary(_) => return self.reject(websocket, None).await,
+                // A Close frame before `AuthRequest` means the handshake did
+                // not complete — a genuine processing outcome, not an
+                // expected authentication rejection.
+                Message::Close(_) => return Err(AgentGatewayError::ConnectionClosed),
+                // Control frames tungstenite already handles at the protocol
+                // level (e.g. auto-queuing a Pong reply) without becoming
+                // Agent Protocol messages; `Frame` is never returned by a
+                // read per tungstenite's own contract.
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+            }
+        }
+    }
+
+    async fn handle_text<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+        text: &str,
+    ) -> Result<HandshakeOutcome, AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        // Malformed JSON and an unknown top-level `type` are both a
+        // `DecodeError` here (`bamep_agent_protocol::codec`): neither yields
+        // a trustworthy `message_id`, so no partial/unsafe extraction is
+        // attempted — the response omits `correlation_id` entirely.
+        let Ok(message) = decode(text) else {
+            return self.reject(websocket, None).await;
+        };
+
+        let AgentProtocolMessage::AuthRequest(auth_request) = message else {
+            // Known message, wrong phase (e.g. `BootstrapEvidence`,
+            // `SessionEstablished`, or `AuthError` sent by the Agent before
+            // authentication). Decoding succeeded, so this message_id is
+            // trustworthy and is used for correlation.
+            let message_id = message.envelope().message_id;
+            return self.reject(websocket, Some(message_id)).await;
+        };
+
+        self.handle_auth_request(websocket, auth_request).await
+    }
+
+    async fn handle_auth_request<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+        auth_request: AuthRequestMessage,
+    ) -> Result<HandshakeOutcome, AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let message_id = auth_request.envelope.message_id;
+
+        // CRITICAL ordering: protocol_version is checked before redeem is
+        // ever called. An incompatible version must never consume/rotate an
+        // otherwise-valid credential.
+        if !auth_request.envelope.protocol_version.is_v1() {
+            return self.reject(websocket, Some(message_id)).await;
+        }
+
+        // Persist-before-send (ADR-0012): `redeem` returns only after the
+        // accepted credential/identity transition has already committed. A
+        // repository/Application failure here is a genuine Gateway error,
+        // never reinterpreted as a credential rejection.
+        let outcome = self
+            .enrollment
+            .redeem(&auth_request.body.credential)
+            .await?;
+
+        match outcome {
+            RedeemResult::Rejected => self.reject(websocket, Some(message_id)).await,
+            RedeemResult::Established {
+                endpoint_id,
+                runtime_credential,
+                credential_expires_at,
+            } => {
+                let session_id = ProtocolId::generate();
+                let response = SessionEstablishedMessage::new(
+                    session_id,
+                    runtime_credential.to_wire_value(),
+                    MessageTimestamp::from_datetime(credential_expires_at),
+                )
+                .with_correlation_id(message_id);
+
+                let wire = encode(&AgentProtocolMessage::SessionEstablished(response))
+                    .expect("a well-formed SessionEstablished always encodes");
+                websocket
+                    .send(Message::text(wire))
+                    .await
+                    .map_err(AgentGatewayError::Send)?;
+
+                Ok(HandshakeOutcome::Established(AuthenticatedSession {
+                    endpoint_id,
+                    session_id,
+                }))
+            }
+        }
+    }
+
+    /// Sends the single generic `AuthError` this checkpoint ever produces and
+    /// returns [`HandshakeOutcome::Rejected`]. `correlation_id` is set only
+    /// when a trustworthy `message_id` was already decoded.
+    async fn reject<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+        correlation_id: Option<ProtocolId>,
+    ) -> Result<HandshakeOutcome, AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut error = AuthErrorMessage::new(GENERIC_AUTH_ERROR_REASON);
+        if let Some(id) = correlation_id {
+            error = error.with_correlation_id(id);
+        }
+        let wire = encode(&AgentProtocolMessage::AuthError(error))
+            .expect("a well-formed AuthError always encodes");
+        websocket
+            .send(Message::text(wire))
+            .await
+            .map_err(AgentGatewayError::Send)?;
+        Ok(HandshakeOutcome::Rejected)
+    }
+}

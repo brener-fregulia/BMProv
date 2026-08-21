@@ -112,8 +112,12 @@ name = "bamep-server"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bamep-agent-protocol",
  "bamep-domain",
+ "bamep-simulator",
  "chrono",
+ "futures-util",
+ "rcgen",
  "rustls",
  "serde",
  "serde_json",

@@ -14,11 +14,11 @@ tokio = { version = "1", features = ["net"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 ring = "0.17"
 thiserror = "1"
 
 [dev-dependencies]
 bamep-server = { path = "../server" }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time"] }
