@@ -1,12 +1,26 @@
-//! Component/Integration tests: `EnrollmentService` + `BootOrchestrationService`
-//! against the real `PostgresEndpointRepository` and a real PostgreSQL
-//! instance (ADR-0013), exercising the ADR-0012 credential chain and
-//! ADR-0004 operator-approval-gated enrollment through the real Application
+//! Component/Integration tests: `EnrollmentService` against the real
+//! `PostgresEndpointRepository` and a real PostgreSQL instance (ADR-0013),
+//! exercising the ADR-0012 credential chain and ADR-0004
+//! operator-approval-gated enrollment through the real Application
 //! operations — no direct database row mutation anywhere in this file
 //! (Issue #17 "Safety constraints"); direct SQL is used only to *read* and
 //! assert on durable state the Application/Domain already committed, and —
 //! in exactly one test — to install a test-local trigger that forces a
 //! deterministic mid-transaction failure inside this disposable database.
+//!
+//! `EnrollmentService` has not yet migrated to ADR-0014 self-locating
+//! credential redemption (that is a later checkpoint) — it still redeems the
+//! transitional HMAC-signed enrollment token (`bamep_domain::credential::enrollment`).
+//! `BootOrchestrationService` itself *has* migrated (ADR-0014 point 11,
+//! persist-before-deliver issuance against `BootContextRepository`) and no
+//! longer produces an HMAC-verifiable credential, so it can no longer serve
+//! as this file's enrollment-credential fixture. Every test below instead
+//! issues its legacy enrollment credential directly via
+//! [`issue_legacy_enrollment_credential`], a transitional test-local fixture
+//! that calls `enrollment::issue` against a test-local `SigningKey` — this
+//! is explicitly *not* a statement that HMAC remains the architectural
+//! target; it only keeps these still-relevant ADR-0012/ADR-0004 tests
+//! running until `EnrollmentService` itself migrates.
 //!
 //! The operator-approval calls below stand in for the "control path separate
 //! from the Simulated Agent participant" (Issue #17 RF-002): this test file
@@ -25,30 +39,48 @@ mod support;
 
 use std::sync::Arc;
 
-use bamep_domain::credential::enrollment::SigningKey;
+use bamep_domain::credential::enrollment::{self, SigningKey};
 use bamep_domain::{Actor, CredentialSecret};
 use bamep_server::adapters::postgres::PostgresEndpointRepository;
-use bamep_server::application::{
-    ApplicationError, BootOrchestrationService, Clock, EnrollmentService, RedeemResult,
-};
+use bamep_server::application::{ApplicationError, Clock, EnrollmentService, RedeemResult};
 use bamep_server::ports::EndpointRepository;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use support::{ManualClock, TestDatabase};
+
+/// The fixed enrollment-token TTL every test in this file issues against —
+/// kept as one named constant so the "10 minutes past a 5-minute TTL" style
+/// assertions below stay self-explanatory.
+fn legacy_enrollment_ttl() -> Duration {
+    Duration::minutes(5)
+}
+
+/// Transitional test-local fixture for the not-yet-migrated
+/// `EnrollmentService`/ADR-0012 redemption path (this checkpoint migrates
+/// only `BootOrchestrationService`, ADR-0014). Issues a legacy HMAC
+/// enrollment credential directly via `enrollment::issue` against a
+/// test-local `SigningKey`, bypassing `BootOrchestrationService` entirely —
+/// it now issues a self-locating ADR-0014 `PresentedCredential` instead,
+/// which `EnrollmentService::redeem` does not yet understand. Remove this
+/// fixture once `EnrollmentService` itself migrates to ADR-0014 credential
+/// redemption.
+fn issue_legacy_enrollment_credential(key: &SigningKey, now: DateTime<Utc>) -> CredentialSecret {
+    enrollment::issue(key, now, legacy_enrollment_ttl())
+}
 
 fn build_services(
     pool: PgPool,
 ) -> (
-    BootOrchestrationService,
+    SigningKey,
     EnrollmentService<PostgresEndpointRepository>,
     Arc<ManualClock>,
 ) {
     let clock = Arc::new(ManualClock::new(Utc::now()));
     let repo = Arc::new(PostgresEndpointRepository::new(pool));
     let key = SigningKey::generate();
-    let boot = BootOrchestrationService::new(key.clone(), Duration::minutes(5));
-    let enrollment = EnrollmentService::with_clock(repo, key, Arc::clone(&clock) as Arc<dyn Clock>);
-    (boot, enrollment, clock)
+    let enrollment =
+        EnrollmentService::with_clock(repo, key.clone(), Arc::clone(&clock) as Arc<dyn Clock>);
+    (key, enrollment, clock)
 }
 
 async fn domain_event_count(pool: &PgPool, endpoint_id: bamep_domain::EndpointId) -> i64 {
@@ -153,9 +185,9 @@ async fn closed_vocabulary_columns_use_native_postgres_enum_types() {
 #[tokio::test]
 async fn valid_first_enrollment_reaches_pending_enrollment_and_credential_active() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let result = enrollment.redeem("sim-endpoint-01", e1).await.unwrap();
 
     assert!(matches!(result, RedeemResult::Established { .. }));
@@ -166,7 +198,7 @@ async fn valid_first_enrollment_reaches_pending_enrollment_and_credential_active
 #[tokio::test]
 async fn rejected_credential_yields_no_session_and_no_persisted_transition() {
     let db = TestDatabase::setup().await;
-    let (_boot, enrollment, _clock) = build_services(db.pool.clone());
+    let (_key, enrollment, _clock) = build_services(db.pool.clone());
 
     let bogus = CredentialSecret("not-a-real-enrollment-credential".into());
     let result = enrollment.redeem("sim-endpoint-02", bogus).await.unwrap();
@@ -180,9 +212,9 @@ async fn rejected_credential_yields_no_session_and_no_persisted_transition() {
 #[tokio::test]
 async fn expired_enrollment_credential_is_rejected() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     clock.advance(Duration::minutes(10)); // past the 5-minute enrollment TTL
 
     let result = enrollment.redeem("sim-endpoint-03", e1).await.unwrap();
@@ -194,9 +226,9 @@ async fn expired_enrollment_credential_is_rejected() {
 #[tokio::test]
 async fn operator_approval_via_separate_control_path_transitions_to_enrolled() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } =
         enrollment.redeem("sim-endpoint-04", e1).await.unwrap()
     else {
@@ -222,9 +254,9 @@ async fn operator_approval_via_separate_control_path_transitions_to_enrolled() {
 #[tokio::test]
 async fn approve_enrollment_commits_state_event_and_audit_atomically() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } = enrollment
         .redeem("sim-endpoint-atomic-01", e1)
         .await
@@ -270,9 +302,9 @@ async fn approve_enrollment_commits_state_event_and_audit_atomically() {
 #[tokio::test]
 async fn invalid_transition_rolls_back_without_partial_writes() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } = enrollment
         .redeem("sim-endpoint-invalid-01", e1)
         .await
@@ -315,9 +347,9 @@ async fn invalid_transition_rolls_back_without_partial_writes() {
 #[tokio::test]
 async fn reconnect_preserves_enrolled_identity_without_repeated_approval() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established {
         endpoint_id,
         runtime_credential: r1,
@@ -354,9 +386,9 @@ async fn reconnect_preserves_enrolled_identity_without_repeated_approval() {
 #[tokio::test]
 async fn predecessor_retry_after_unconfirmed_successor_supersedes_and_reissues() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established {
         runtime_credential: r1,
         ..
@@ -398,9 +430,9 @@ async fn predecessor_retry_after_unconfirmed_successor_supersedes_and_reissues()
 #[tokio::test]
 async fn revoked_chain_rejects_every_credential_in_it() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established {
         endpoint_id,
         runtime_credential: r1,
@@ -452,9 +484,9 @@ async fn approving_unknown_endpoint_fails_explicitly() {
 #[tokio::test]
 async fn durable_state_survives_a_fresh_pool_instance() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } = enrollment
         .redeem("sim-endpoint-durable-01", e1)
         .await
@@ -495,10 +527,10 @@ async fn durable_state_survives_a_fresh_pool_instance() {
 #[tokio::test]
 async fn concurrent_first_contact_does_not_create_duplicate_identity() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
     let enrollment = Arc::new(enrollment);
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
 
     // Two concurrent AuthRequests presenting the same boot-scoped
     // enrollment credential for a never-before-seen inventory_signal — e.g.
@@ -553,9 +585,9 @@ async fn concurrent_first_contact_does_not_create_duplicate_identity() {
 #[tokio::test]
 async fn concurrent_same_predecessor_redemption_only_last_commit_wins() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { .. } = enrollment
         .redeem("sim-endpoint-race-02", e1.clone())
         .await
@@ -644,12 +676,12 @@ async fn concurrent_same_predecessor_redemption_only_last_commit_wins() {
 #[tokio::test]
 async fn commit_time_credential_validity_is_evaluated_after_lock_acquisition() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
     let enrollment = Arc::new(enrollment.with_credential_ttl(Duration::milliseconds(300)));
 
     let signal = "sim-endpoint-clock-race-01";
     let t0 = clock.now();
-    let e1 = boot.issue_enrollment_credential(t0);
+    let e1 = issue_legacy_enrollment_credential(&key, t0);
     let RedeemResult::Established {
         runtime_credential: r1,
         ..
@@ -713,9 +745,9 @@ async fn commit_time_credential_validity_is_evaluated_after_lock_acquisition() {
 #[tokio::test]
 async fn genuine_reboot_reestablishes_chain_for_known_enrolled_endpoint_without_reapproval() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established {
         endpoint_id,
         runtime_credential: r1,
@@ -747,7 +779,7 @@ async fn genuine_reboot_reestablishes_chain_for_known_enrolled_endpoint_without_
     // from its old runtime chain — long after that chain's TTL, though the
     // TTL elapsing is incidental here, not what triggers this path.
     clock.advance(Duration::hours(2));
-    let e2 = boot.issue_enrollment_credential(clock.now());
+    let e2 = issue_legacy_enrollment_credential(&key, clock.now());
     let result = enrollment
         .redeem("sim-endpoint-reboot-01", e2)
         .await
@@ -798,9 +830,9 @@ async fn genuine_reboot_reestablishes_chain_for_known_enrolled_endpoint_without_
 #[tokio::test]
 async fn genuine_reboot_does_not_bypass_authentication_with_invalid_credential() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { .. } = enrollment
         .redeem("sim-endpoint-reboot-02", e1)
         .await
@@ -831,9 +863,9 @@ async fn genuine_reboot_does_not_bypass_authentication_with_invalid_credential()
 #[tokio::test]
 async fn genuine_reboot_does_not_clear_explicit_credential_revocation() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } = enrollment
         .redeem("sim-endpoint-reboot-03", e1)
         .await
@@ -850,7 +882,7 @@ async fn genuine_reboot_does_not_clear_explicit_credential_revocation() {
     // A brand-new, independently valid enrollment credential — not a
     // retried/stale value from before the revocation.
     clock.advance(Duration::seconds(1));
-    let e2 = boot.issue_enrollment_credential(clock.now());
+    let e2 = issue_legacy_enrollment_credential(&key, clock.now());
     let result = enrollment
         .redeem("sim-endpoint-reboot-03", e2)
         .await
@@ -878,9 +910,9 @@ async fn genuine_reboot_does_not_clear_explicit_credential_revocation() {
 #[tokio::test]
 async fn transaction_rolls_back_entirely_when_a_later_statement_fails() {
     let db = TestDatabase::setup().await;
-    let (boot, enrollment, clock) = build_services(db.pool.clone());
+    let (key, enrollment, clock) = build_services(db.pool.clone());
 
-    let e1 = boot.issue_enrollment_credential(clock.now());
+    let e1 = issue_legacy_enrollment_credential(&key, clock.now());
     let RedeemResult::Established { endpoint_id, .. } = enrollment
         .redeem("sim-endpoint-rollback-01", e1)
         .await

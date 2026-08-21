@@ -8,13 +8,17 @@
 use std::sync::Arc;
 
 use bamep_domain::credential::enrollment::{self, SigningKey};
+use bamep_domain::credential::CredentialHash;
+use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
 use bamep_domain::{
-    transitions, Actor, CredentialSecret, EndpointId, InvalidIdentityTransition,
+    transitions, Actor, BootContext, CredentialSecret, EndpointId, InvalidIdentityTransition,
     DEFAULT_CREDENTIAL_TTL,
 };
 use chrono::{DateTime, Duration, Utc};
 
-use crate::ports::{EndpointRepository, EndpointUpdateError, RepositoryError};
+use crate::ports::{
+    BootContextRepository, EndpointRepository, EndpointUpdateError, RepositoryError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApplicationError {
@@ -79,25 +83,52 @@ pub enum RedeemResult {
 /// Boot Orchestration's Application-level responsibility
 /// (`m0-stack-and-boundaries-baseline.md` "Component responsibilities and
 /// boundaries" — Application: Boot Orchestration): issuing the boot-scoped
-/// enrollment credential (ADR-0004 point 2). For WP1, the real PXE/boot-chain
-/// delivery of this credential to an endpoint is faked by the Simulator
-/// fixture (`m0-simulator-contract-and-validation-strategy.md`); this
-/// service's issuance logic itself is real.
-pub struct BootOrchestrationService {
-    signing_key: SigningKey,
+/// enrollment credential (ADR-0004 point 2) as a durable, self-locating
+/// ADR-0014 credential, following the mandatory persist-before-deliver
+/// ordering (ADR-0014 point 11). For WP1, the real PXE/boot-chain delivery of
+/// this credential to an endpoint is faked by the Simulator fixture
+/// (`m0-simulator-contract-and-validation-strategy.md`); this service's
+/// issuance logic itself is real.
+pub struct BootOrchestrationService<R: BootContextRepository> {
+    repo: Arc<R>,
     enrollment_ttl: Duration,
 }
 
-impl BootOrchestrationService {
-    pub fn new(signing_key: SigningKey, enrollment_ttl: Duration) -> Self {
+impl<R: BootContextRepository> BootOrchestrationService<R> {
+    pub fn new(repo: Arc<R>, enrollment_ttl: Duration) -> Self {
         Self {
-            signing_key,
+            repo,
             enrollment_ttl,
         }
     }
 
-    pub fn issue_enrollment_credential(&self, now: DateTime<Utc>) -> CredentialSecret {
-        enrollment::issue(&self.signing_key, now, self.enrollment_ttl)
+    /// Issues a fresh boot-scoped enrollment credential: generates a
+    /// self-locating `PresentedCredential::Enrollment`, derives its one-way
+    /// verifier, and durably persists the backing `BootContext` — only after
+    /// that persistence succeeds does this method return the credential
+    /// (ADR-0014 point 11). A persistence failure returns an
+    /// `ApplicationError` and never returns the generated credential; this
+    /// method does not retry with a fresh credential of its own.
+    ///
+    /// `inventory_signal` is the current WP1 correlation-evidence stand-in
+    /// stored on `BootContext` — evidence only, never authentication and
+    /// never Endpoint identity (ADR-0004; ADR-0014 point 4).
+    pub async fn issue_enrollment_credential(
+        &self,
+        inventory_signal: &str,
+        now: DateTime<Utc>,
+    ) -> Result<PresentedCredential, ApplicationError> {
+        let credential = PresentedCredential::generate(CredentialKind::Enrollment);
+        let verifier = CredentialHash::of_bytes(credential.secret().expose_secret_bytes());
+        let context = BootContext::new(
+            credential.lookup_id().clone(),
+            verifier,
+            now,
+            now + self.enrollment_ttl,
+            inventory_signal.to_string(),
+        );
+        self.repo.insert_boot_context(&context).await?;
+        Ok(credential)
     }
 }
 
@@ -257,5 +288,153 @@ impl<R: EndpointRepository> EnrollmentService<R> {
             Box::new(move |aggregate| Ok(transitions::revoke_credential(&aggregate, now)));
         self.repo.update_endpoint(endpoint_id, decide).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    /// Minimal in-memory `BootContextRepository` fake for Application-level
+    /// unit tests that need precise, DB-free control over persistence
+    /// success/failure and immediate visibility into what was persisted
+    /// (`docs/development/testing.md` "Fakes and test boundaries"). The real
+    /// PostgreSQL persistence path is covered separately by
+    /// `crates/server/tests/boot_orchestration_service.rs`.
+    #[derive(Default)]
+    struct FakeBootContextRepository {
+        contexts: Mutex<Vec<BootContext>>,
+        fail: bool,
+    }
+
+    impl FakeBootContextRepository {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn failing() -> Self {
+            Self {
+                contexts: Mutex::new(Vec::new()),
+                fail: true,
+            }
+        }
+
+        fn persisted(&self) -> Vec<BootContext> {
+            self.contexts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl BootContextRepository for FakeBootContextRepository {
+        async fn insert_boot_context(&self, context: &BootContext) -> Result<(), RepositoryError> {
+            if self.fail {
+                return Err(RepositoryError::Backend(
+                    "simulated persistence failure".into(),
+                ));
+            }
+            self.contexts.lock().unwrap().push(context.clone());
+            Ok(())
+        }
+    }
+
+    fn now() -> DateTime<Utc> {
+        Utc::now()
+    }
+
+    #[tokio::test]
+    async fn issuance_returns_a_valid_self_locating_enrollment_credential() {
+        let repo = Arc::new(FakeBootContextRepository::new());
+        let service = BootOrchestrationService::new(repo, Duration::minutes(5));
+
+        let credential = service
+            .issue_enrollment_credential("sim-boot-orch-01", now())
+            .await
+            .expect("issuance must succeed");
+
+        assert_eq!(credential.kind(), CredentialKind::Enrollment);
+        // Self-locating: round-trips through the wire encoding cleanly.
+        let wire = credential.to_wire_value();
+        let parsed = PresentedCredential::parse(&wire).expect("must parse");
+        assert_eq!(parsed.lookup_id(), credential.lookup_id());
+    }
+
+    #[tokio::test]
+    async fn boot_context_is_durably_persisted_before_the_credential_is_returned() {
+        let repo = Arc::new(FakeBootContextRepository::new());
+        let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
+
+        assert!(repo.persisted().is_empty());
+        let credential = service
+            .issue_enrollment_credential("sim-boot-orch-02", now())
+            .await
+            .expect("issuance must succeed");
+
+        let persisted = repo.persisted();
+        assert_eq!(
+            persisted.len(),
+            1,
+            "BootContext must be durably persisted exactly once by the time issuance returns"
+        );
+        assert_eq!(persisted[0].boot_context_id(), credential.lookup_id());
+    }
+
+    #[tokio::test]
+    async fn persisted_boot_context_matches_the_returned_credential() {
+        let repo = Arc::new(FakeBootContextRepository::new());
+        let ttl = Duration::minutes(5);
+        let service = BootOrchestrationService::new(Arc::clone(&repo), ttl);
+        let issued_at = now();
+
+        let credential = service
+            .issue_enrollment_credential("sim-boot-orch-03", issued_at)
+            .await
+            .expect("issuance must succeed");
+
+        let persisted = repo.persisted();
+        let context = &persisted[0];
+
+        assert_eq!(context.boot_context_id(), credential.lookup_id());
+        assert!(context.verify_secret(credential.secret()));
+        assert_eq!(context.issued_at(), issued_at);
+        assert_eq!(context.expires_at(), issued_at + ttl);
+        assert_eq!(context.inventory_signal(), "sim-boot-orch-03");
+        assert_eq!(context.resolved_endpoint_id(), None);
+    }
+
+    #[tokio::test]
+    async fn two_issuances_generate_distinct_lookup_ids_and_secrets() {
+        let repo = Arc::new(FakeBootContextRepository::new());
+        let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
+
+        let a = service
+            .issue_enrollment_credential("sim-boot-orch-04", now())
+            .await
+            .unwrap();
+        let b = service
+            .issue_enrollment_credential("sim-boot-orch-04", now())
+            .await
+            .unwrap();
+
+        assert_ne!(a.lookup_id(), b.lookup_id());
+        assert_ne!(
+            a.secret().expose_secret_bytes(),
+            b.secret().expose_secret_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_yields_an_application_error_and_no_credential() {
+        let repo = Arc::new(FakeBootContextRepository::failing());
+        let service = BootOrchestrationService::new(Arc::clone(&repo), Duration::minutes(5));
+
+        let err = service
+            .issue_enrollment_credential("sim-boot-orch-05", now())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ApplicationError::Repository(_)));
+        assert!(repo.persisted().is_empty());
     }
 }
