@@ -98,13 +98,13 @@ Define enough of the trusted-bootstrap and Server-fingerprint-delivery contract 
 
 ## 2. Bootstrap material
 
-- **Expected Server TLS certificate fingerprint** — always required.
+- **Expected Server TLS certificate fingerprint** — always required. **Accepted (Agent Protocol v1 owner decision): SHA-256 over the exact DER bytes of the leaf/end-entity certificate the Server presents during the TLS handshake — a 32-byte digest.** This is exact-certificate pinning: not an SPKI/public-key pin, not a CA certificate fingerprint, not a certificate-chain fingerprint, and not a hostname-derived identity. A new Server leaf certificate therefore has a different fingerprint even when it reuses the same key pair. Certificate-rotation mechanics themselves are not designed here — see `docs/specifications/m0-agent-protocol-contract.md` "Transport and handshake" for the resulting TLS-authentication policy, and "Rotation, revocation, and recovery" below for the rotation consequence at contract level.
 - **Enrollment/bootstrap context** — required only if the future pre-authorized enrollment capability is in use; **not required for M0's default operator-approval-gated enrollment path**. See "Confidentiality boundary" below for why this field's future semantics are explicitly not decided here.
 - **Explicit domain/contract discriminator and schema/contract version** — so the signer and verifier agree the signed structure is a Bamep bootstrap assertion of a known shape, not an arbitrary signed byte string (see "(C)" for why this matters).
 - **`boot_nonce`** — the freshness primitive; see "(C)."
 - **Signing-key identifier / verification metadata** — which trust-anchor key the assertion claims to be signed by, distinct from *whether* that key is actually trusted (sub-problem (B)).
 
-No other configuration is added merely because a bootstrap object exists. The digest/hash algorithm used to represent the fingerprint itself is **not selected here**, consistent with ADR-0008 point 3's already-deferred `digest_algorithm` selection.
+No other configuration is added merely because a bootstrap object exists. **This SHA-256 choice is scoped only to the Agent Protocol v1 Server TLS certificate fingerprint above** — it does not select ADR-0008 point 3's already-deferred `digest_algorithm` for Artifact/data-plane digests, or any other project-wide digest convention; that decision remains separately deferred, unaffected by this one. The concrete serialization of this 32-byte digest **inside** the future signed `bootstrap_assertion` (hex, base64, CBOR bytes, a JSON string, or another representation) is likewise not selected here and remains implementation-time until that assertion-format checkpoint — Simulator fixtures may carry the fingerprint as a typed/raw 32-byte value without inventing that production encoding.
 
 ## (B) Site trust-anchor provisioning
 
@@ -193,7 +193,7 @@ explicit product/security boundary, not an implementation defect.
    - an explicit domain/contract discriminator (so the signer cannot be tricked into signing an unrelated structure that happens to parse compatibly);
    - schema/contract version;
    - the exact `boot_nonce`;
-   - the expected Server TLS certificate fingerprint;
+   - the expected Server TLS certificate fingerprint (the SHA-256/32-byte digest defined in "Bootstrap material" above — its serialization *within* this signed assertion remains a separate, still-undecided question);
    - signing-key identifier / verification metadata;
    - enrollment/bootstrap context, **only** where a separately-defined enrollment mechanism requires it (see "Confidentiality boundary" below).
 4. **The signer signs this fixed, structured assertion — it must not act as a generic arbitrary-byte signing oracle.** Signing an attacker-chosen arbitrary payload under the site key would defeat the discriminator/schema protections above; the signer's role is scoped to producing exactly this structure.
@@ -280,6 +280,7 @@ The final Boot Adapter / maintenance-environment implementation must provide an 
 - **Signing/trust-anchor key rotation** follows the contract-level semantics accepted in "(B) Site trust-anchor provisioning" (ADR-0011): an authenticated rotation path under the existing paired key where possible; recovery from an unavailable/compromised key returns to an explicit operator verification ceremony. Concrete rotation protocol/UX remains implementation-time.
 - **Compromised/revoked bootstrap material or key** fails closed (see "Failure semantics"); revocation mechanics follow the same (B) contract-level semantics.
 - **No silent TOFU or multiple simultaneously-accepted unverified fingerprints** are introduced by rotation — exactly one authenticated fingerprint is accepted per successful bootstrap sequence.
+- **Server certificate identity is stable across ordinary Server restarts.** The production Server certificate/key identity must not be regenerated merely because the Server process restarted — doing so would change the leaf-certificate fingerprint (see "Bootstrap material" above) and invalidate every already-authenticated expected fingerprint, which is a rotation event, not routine operation. Exact certificate/key storage, configuration, and rotation mechanics remain implementation/deployment detail, not designed here. Test/Simulator environments may use ephemeral generated certificates precisely because their trusted-bootstrap fixture supplies the matching expected fingerprint for that test boot context (`docs/specifications/m0-simulator-contract-and-validation-strategy.md` "Simulator fidelity boundary") — this is not an exception to the production stability requirement, since production and fixture-driven trust are already distinct paths.
 
 ## 6. Agent bootstrap sequence
 
