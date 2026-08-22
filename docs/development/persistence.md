@@ -85,8 +85,10 @@ kind) — should not default to repeated free-form `TEXT`.
   performance need before use — it saves little over `ENUM` while losing
   SQL readability and semantic clarity.
 * PostgreSQL `ENUM` evolution (adding/renaming/removing a label) is itself
-  schema evolution and goes through a versioned migration like any other
-  schema change — never an implicit/ad-hoc value.
+  schema evolution. During pre-baseline development, changes may be folded
+  into the current baseline migration; after baseline freeze, they require a
+  new versioned migration like any other schema change. They are never an
+  implicit/ad-hoc value.
 * SQLx/PostgreSQL enum representations (`#[derive(sqlx::Type)]`) stay
   inside the PostgreSQL Adapter, mapped explicitly to/from the Domain type;
   they must not leak into Domain, consistent with "Domain versus
