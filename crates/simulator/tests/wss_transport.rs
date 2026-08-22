@@ -7,8 +7,9 @@
 //! establishes a real WSS connection over which a real `AuthRequest` JSON
 //! text frame crosses; a wrong pin fails during TLS before the WebSocket
 //! Upgrade, and structurally before any Agent Protocol message could be
-//! exchanged. Does not call `EnrollmentService`, and does not produce
-//! `SessionEstablished`/`AuthError` — those belong to a later checkpoint.
+//! exchanged. This narrow transport test deliberately does not call
+//! `EnrollmentService` or exercise handshake/session responses; those are
+//! covered by the Server Gateway WSS integration suite.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};

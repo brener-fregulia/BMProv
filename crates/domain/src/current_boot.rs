@@ -23,11 +23,8 @@ use crate::presented_credential::CredentialLookupId;
 /// Whether the Server has independently verified authenticated
 /// `BootstrapEvidence` for this exact current boot
 /// (`m0-trusted-bootstrap-and-server-fingerprint-contract.md` "(D)
-/// Server-side bootstrap evidence"). This checkpoint defines the value only;
-/// the production transition that promotes `NotEstablished` to `Established`
-/// by accepting verified evidence is a later checkpoint's responsibility —
-/// no Port, Gateway API, or Domain bypass constructor for that is introduced
-/// here.
+/// Server-side bootstrap evidence"). Promotion from `NotEstablished` to
+/// `Established` is owned by the pure transition in `crate::transitions`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TrustedBootstrapState {
     NotEstablished,

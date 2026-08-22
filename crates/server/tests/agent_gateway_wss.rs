@@ -18,9 +18,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bamep_agent_protocol::{
-    decode, encode, AgentProtocolMessage, AuthRequestMessage, ProtocolVersion,
+    decode, encode, AgentProtocolMessage, AuthRequestMessage, BootstrapEvidenceMessage,
+    ProtocolVersion,
 };
 use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
+use bamep_domain::{Actor, BootNonce, EndpointId};
 use bamep_server::adapters::agent_gateway::{AgentControlGateway, HandshakeOutcome};
 use bamep_server::adapters::agent_transport::AgentTransportAcceptor;
 use bamep_server::adapters::postgres::{
@@ -154,6 +156,305 @@ async fn valid_auth_request_over_real_wss_reaches_session_established() {
     .unwrap();
     assert_eq!(row, ("PendingEnrollment".into(), "Established".into()));
 
+    let endpoint_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM endpoints WHERE inventory_signal = $1")
+            .bind("wss-established-01")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    enrollment
+        .approve_enrollment(
+            EndpointId(endpoint_id),
+            Actor::Operator {
+                label: "wp1-wss-harness".into(),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let final_row: (String, String) = sqlx::query_as(
+        "SELECT identity_state::text, trusted_bootstrap_state::text FROM endpoints WHERE id = $1",
+    )
+    .bind(endpoint_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(final_row, ("Enrolled".into(), "Established".into()));
+
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn authenticated_session_closed_without_evidence_remains_not_established() {
+    let db = TestDatabase::setup().await;
+    let (boot, enrollment) = build_services(db.pool.clone());
+    let issuer = TrustedBootstrapFixtureIssuer::from_seed([0x32; 32]);
+    let evidence_service = Arc::new(BootstrapEvidenceService::new(
+        Arc::new(PostgresEndpointRepository::new(db.pool.clone())),
+        AcceptedSiteKeys::single(issuer.public_key()),
+    ));
+    let gateway =
+        Arc::new(Gateway::new(enrollment).with_bootstrap_evidence_service(evidence_service));
+    let (cert_der, key_der) = generate_test_cert("localhost");
+    let fingerprint = ServerCertFingerprint::from_leaf_der(cert_der.as_ref());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = AgentTransportAcceptor::new(vec![cert_der], key_der).unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut connection = acceptor.accept(tcp).await.unwrap();
+        let HandshakeOutcome::Established(session) =
+            gateway.handshake(&mut connection.websocket).await?
+        else {
+            panic!("authentication must establish")
+        };
+        gateway
+            .run_authenticated_session(
+                &mut connection.websocket,
+                session,
+                connection.server_fingerprint,
+            )
+            .await
+    });
+    let nonce = BootNonce::from_bytes([0x52; 32]);
+    let credential = boot
+        .issue_enrollment_credential("wss-missing-evidence", nonce, Utc::now())
+        .await
+        .unwrap();
+    let mut websocket = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    assert!(matches!(
+        authenticate(&mut websocket, &credential.to_wire_value())
+            .await
+            .unwrap(),
+        SimulatorHandshakeOutcome::Established(_)
+    ));
+    websocket.close(None).await.unwrap();
+    server.await.unwrap().unwrap();
+    let state: String = sqlx::query_scalar(
+        "SELECT trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-missing-evidence")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "NotEstablished");
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn evidence_for_certificate_b_is_silently_rejected_on_certificate_a_connection() {
+    let db = TestDatabase::setup().await;
+    let (boot, enrollment) = build_services(db.pool.clone());
+    let issuer = TrustedBootstrapFixtureIssuer::from_seed([0x33; 32]);
+    let evidence_service = Arc::new(BootstrapEvidenceService::new(
+        Arc::new(PostgresEndpointRepository::new(db.pool.clone())),
+        AcceptedSiteKeys::single(issuer.public_key()),
+    ));
+    let gateway =
+        Arc::new(Gateway::new(enrollment).with_bootstrap_evidence_service(evidence_service));
+    let (cert_a, key_a) = generate_test_cert("localhost");
+    let fingerprint_a = ServerCertFingerprint::from_leaf_der(cert_a.as_ref());
+    let (cert_b, _key_b) = generate_test_cert("localhost");
+    let fingerprint_b = ServerCertFingerprint::from_leaf_der(cert_b.as_ref());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = AgentTransportAcceptor::new(vec![cert_a], key_a).unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut connection = acceptor.accept(tcp).await.unwrap();
+        assert_eq!(connection.server_fingerprint, fingerprint_a);
+        let HandshakeOutcome::Established(session) =
+            gateway.handshake(&mut connection.websocket).await?
+        else {
+            panic!("authentication must establish")
+        };
+        gateway
+            .run_authenticated_session(
+                &mut connection.websocket,
+                session,
+                connection.server_fingerprint,
+            )
+            .await
+    });
+    let nonce = BootNonce::from_bytes([0x53; 32]);
+    let credential = boot
+        .issue_enrollment_credential("wss-fingerprint-bound", nonce, Utc::now())
+        .await
+        .unwrap();
+    // Pin A normally. The deliberately mismatching B assertion is sent only
+    // after authentication, bypassing the normal local-bootstrap gate.
+    let mut websocket = connect_pinned_wss(addr, "localhost", fingerprint_a)
+        .await
+        .unwrap();
+    assert!(matches!(
+        authenticate(&mut websocket, &credential.to_wire_value())
+            .await
+            .unwrap(),
+        SimulatorHandshakeOutcome::Established(_)
+    ));
+    let evidence = BootstrapEvidenceMessage::new(
+        nonce.to_wire_value(),
+        issuer.issue(nonce, fingerprint_b).to_wire_value(),
+    );
+    websocket
+        .send(Message::text(
+            encode(&AgentProtocolMessage::BootstrapEvidence(evidence)).unwrap(),
+        ))
+        .await
+        .unwrap();
+    websocket.send(Message::text("{")).await.unwrap();
+    let response = websocket.next().await.unwrap().unwrap();
+    assert!(matches!(
+        decode(response.into_text().unwrap().as_str()).unwrap(),
+        AgentProtocolMessage::ProtocolError(_)
+    ));
+    websocket.close(None).await.unwrap();
+    server.await.unwrap().unwrap();
+    let state: String = sqlx::query_scalar(
+        "SELECT trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-fingerprint-bound")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "NotEstablished");
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn old_boot_a_evidence_cannot_establish_authenticated_boot_b_session() {
+    let db = TestDatabase::setup().await;
+    let (boot, enrollment) = build_services(db.pool.clone());
+    let issuer = TrustedBootstrapFixtureIssuer::from_seed([0x34; 32]);
+    let evidence_service = Arc::new(BootstrapEvidenceService::new(
+        Arc::new(PostgresEndpointRepository::new(db.pool.clone())),
+        AcceptedSiteKeys::single(issuer.public_key()),
+    ));
+    let gateway = Arc::new(
+        Gateway::new(Arc::clone(&enrollment)).with_bootstrap_evidence_service(evidence_service),
+    );
+    let (cert_der, key_der) = generate_test_cert("localhost");
+    let fingerprint = ServerCertFingerprint::from_leaf_der(cert_der.as_ref());
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let addr = listener.local_addr().unwrap();
+    let acceptor = Arc::new(AgentTransportAcceptor::new(vec![cert_der], key_der).unwrap());
+    let nonce_a = BootNonce::from_bytes([0x54; 32]);
+    let assertion_a = issuer.issue(nonce_a, fingerprint);
+    let old_evidence =
+        BootstrapEvidenceMessage::new(nonce_a.to_wire_value(), assertion_a.to_wire_value());
+    let credential_a = boot
+        .issue_enrollment_credential("wss-historical", nonce_a, Utc::now())
+        .await
+        .unwrap();
+
+    let listener_a = Arc::clone(&listener);
+    let acceptor_a = Arc::clone(&acceptor);
+    let gateway_a = Arc::clone(&gateway);
+    let server_a = tokio::spawn(async move {
+        let (tcp, _) = listener_a.accept().await.unwrap();
+        let mut connection = acceptor_a.accept(tcp).await.unwrap();
+        let HandshakeOutcome::Established(session) =
+            gateway_a.handshake(&mut connection.websocket).await?
+        else {
+            panic!()
+        };
+        gateway_a
+            .run_authenticated_session(
+                &mut connection.websocket,
+                session,
+                connection.server_fingerprint,
+            )
+            .await
+    });
+    let material_a = SimulatedBootstrapMaterial::from_assertion(&assertion_a);
+    let paired = SimulatedPairedTrust::single(issuer.public_key());
+    let mut connection_a =
+        connect_after_trusted_bootstrap(addr, "localhost", &paired, nonce_a, &material_a)
+            .await
+            .unwrap();
+    assert!(matches!(
+        authenticate(&mut connection_a.websocket, &credential_a.to_wire_value())
+            .await
+            .unwrap(),
+        SimulatorHandshakeOutcome::Established(_)
+    ));
+    send_bootstrap_evidence(&mut connection_a.websocket, &connection_a.established)
+        .await
+        .unwrap();
+    connection_a.websocket.close(None).await.unwrap();
+    server_a.await.unwrap().unwrap();
+
+    let nonce_b = BootNonce::from_bytes([0x55; 32]);
+    let credential_b = boot
+        .issue_enrollment_credential("wss-historical", nonce_b, Utc::now())
+        .await
+        .unwrap();
+    let listener_b = Arc::clone(&listener);
+    let acceptor_b = Arc::clone(&acceptor);
+    let gateway_b = Arc::clone(&gateway);
+    let server_b = tokio::spawn(async move {
+        let (tcp, _) = listener_b.accept().await.unwrap();
+        let mut connection = acceptor_b.accept(tcp).await.unwrap();
+        let HandshakeOutcome::Established(session) =
+            gateway_b.handshake(&mut connection.websocket).await?
+        else {
+            panic!()
+        };
+        gateway_b
+            .run_authenticated_session(
+                &mut connection.websocket,
+                session,
+                connection.server_fingerprint,
+            )
+            .await
+    });
+    let mut websocket_b = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    assert!(matches!(
+        authenticate(&mut websocket_b, &credential_b.to_wire_value())
+            .await
+            .unwrap(),
+        SimulatorHandshakeOutcome::Established(_)
+    ));
+    let before: (Vec<u8>, String) = sqlx::query_as(
+        "SELECT current_boot_nonce, trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-historical")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        before,
+        (nonce_b.as_bytes().to_vec(), "NotEstablished".into())
+    );
+    websocket_b
+        .send(Message::text(
+            encode(&AgentProtocolMessage::BootstrapEvidence(old_evidence)).unwrap(),
+        ))
+        .await
+        .unwrap();
+    websocket_b.send(Message::text("{")).await.unwrap();
+    let response = websocket_b.next().await.unwrap().unwrap();
+    assert!(matches!(
+        decode(response.into_text().unwrap().as_str()).unwrap(),
+        AgentProtocolMessage::ProtocolError(_)
+    ));
+    websocket_b.close(None).await.unwrap();
+    server_b.await.unwrap().unwrap();
+    let after: (Vec<u8>, String) = sqlx::query_as(
+        "SELECT current_boot_nonce, trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-historical")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after,
+        (nonce_b.as_bytes().to_vec(), "NotEstablished".into())
+    );
     db.teardown().await;
 }
 

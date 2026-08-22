@@ -7,9 +7,9 @@
 //! `credential`, `runtime_credential`, `bootstrap_assertion`, and
 //! `boot_nonce` are carried as plain wire strings, never parsed or
 //! interpreted here. Parsing `credential`/`runtime_credential` as a Domain
-//! `PresentedCredential`, and verifying `bootstrap_assertion`, belong to
-//! later checkpoints (Server Agent Control Gateway, trusted-bootstrap
-//! verification) — this crate does not depend on `bamep-domain`.
+//! `PresentedCredential`, and verifying `bootstrap_assertion`, belong to the
+//! Server's Domain/Application boundaries — this crate does not depend on
+//! `bamep-domain`.
 
 use std::fmt;
 

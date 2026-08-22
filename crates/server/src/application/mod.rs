@@ -240,8 +240,8 @@ impl<R: EndpointRepository, C: CredentialRedemptionRepository> EnrollmentService
     }
 
     /// Redeems a presented credential in a fresh `AuthRequest`. Called by the
-    /// (not-yet-implemented, future round) Agent Control Gateway on every
-    /// connection attempt, after the Server's own TLS layer has already
+    /// Agent Control Gateway on every connection attempt, after the Server's
+    /// own TLS layer has already
     /// completed — this method has no notion of TLS/WSS itself.
     ///
     /// `credential_wire` is the opaque value carried by `AuthRequest`

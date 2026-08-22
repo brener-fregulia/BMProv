@@ -11,8 +11,8 @@
 //! already-approved WSS/TLS/Agent Protocol handshake mechanics; this module
 //! owns only the pre-WSS local trust decision and its composition with them.
 //!
-//! Does not implement `BootstrapEvidence` processing (Server-side) — that
-//! belongs to a later checkpoint of Issue #17.
+//! Server-side `BootstrapEvidence` processing remains outside this
+//! Simulator-owned local-trust boundary.
 
 use std::net::SocketAddr;
 

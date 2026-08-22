@@ -8,8 +8,8 @@
 //! This is a transport-oriented Adapter boundary only. It does not parse
 //! `AuthRequest` or any other Agent Protocol message, does not call
 //! `EnrollmentService`, and does not know Domain or PostgreSQL — the
-//! Agent Control Gateway that consumes the [`WebSocketStream`] this module
-//! returns is a later checkpoint.
+//! Agent Control Gateway consumes the accepted connection and its
+//! connection-bound leaf-certificate fingerprint.
 //!
 //! Certificate/private-key material is accepted already-loaded
 //! (`rustls::pki_types` types): production certificate-file configuration

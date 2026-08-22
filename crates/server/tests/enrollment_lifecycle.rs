@@ -171,13 +171,9 @@ async fn boot_context_resolved_endpoint(pool: &PgPool, boot_context_id: &[u8]) -
         .unwrap()
 }
 
-/// Test-only setup, NOT a production transition: Server-side `BootstrapEvidence`
-/// acceptance (`NotEstablished -> Established`) is a later checkpoint, not
-/// implemented yet. This directly forces the persisted
-/// `trusted_bootstrap_state` to `Established` via narrow SQL, purely so the
-/// tests below can exercise "does a same-boot reconnect/genuine-reboot
-/// preserve-or-reset an already-Established state" without depending on
-/// unimplemented production evidence handling.
+/// Narrow test-only setup used by credential-lifecycle tests that are not
+/// intended to duplicate production `BootstrapEvidence` verification. The
+/// dedicated evidence and WSS suites exercise the real transition.
 async fn set_trusted_bootstrap_established(pool: &PgPool, endpoint_id: EndpointId) {
     sqlx::query("UPDATE endpoints SET trusted_bootstrap_state = 'Established' WHERE id = $1")
         .bind(endpoint_id.0)

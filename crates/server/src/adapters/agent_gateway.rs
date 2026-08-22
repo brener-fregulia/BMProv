@@ -12,10 +12,9 @@
 //! accept/reject decision is exactly the one `EnrollmentService::redeem`
 //! already made.
 //!
-//! `BootstrapEvidence` processing (verification, trusted-bootstrap state)
-//! belongs to a later checkpoint: this module only proves that a phase-
-//! invalid message — including `BootstrapEvidence` sent before `AuthRequest`
-//! — is rejected during the handshake, per "Phase validation" below.
+//! After authentication this module drives the session loop, delegates
+//! `BootstrapEvidence` verification to the Application service, and handles
+//! post-session protocol violations.
 
 use std::sync::Arc;
 

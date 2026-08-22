@@ -13,9 +13,8 @@
 //! adds local trusted-bootstrap establishment
 //! ([`trusted_bootstrap::establish_trusted_bootstrap`]) and the
 //! establish-then-connect composition helper
-//! ([`trusted_bootstrap::connect_after_trusted_bootstrap`]). It does not
-//! implement Server-side `BootstrapEvidence` processing — that belongs to a
-//! later checkpoint of Issue #17.
+//! ([`trusted_bootstrap::connect_after_trusted_bootstrap`]) and sends the
+//! retained assertion as post-authentication `BootstrapEvidence`.
 //!
 //! Production dependency direction: `bamep-simulator` depends on
 //! `bamep-agent-protocol` for the wire model and on

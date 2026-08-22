@@ -12,8 +12,8 @@
 //!
 //! This module is pure, like [`crate::credential`] and
 //! [`crate::transitions`]: it never touches the clock or randomness
-//! directly, and knows nothing about PostgreSQL, locking, or how it is
-//! persisted. Those remain later checkpoints.
+//! directly, and knows nothing about PostgreSQL, locking, or persistence;
+//! those responsibilities remain in the Server adapters.
 
 use bamep_trusted_bootstrap::BootNonce;
 use chrono::{DateTime, Utc};
