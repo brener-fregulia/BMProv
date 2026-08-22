@@ -24,10 +24,12 @@ impl Default for EndpointId {
     }
 }
 
-/// The aggregate this Work Package operates on: identity lifecycle and
-/// credential/session lifecycle together, kept as the two independent
-/// dimensions `m0-endpoint-identity-lifecycle.md` requires them to be. Only
-/// the dimensions WP1 actually implements are represented here;
+/// The aggregate this Work Package operates on: identity lifecycle,
+/// credential/session lifecycle, and the authoritative current-boot/
+/// trusted-bootstrap dimension (`current_boot`), kept as the independent
+/// dimensions `m0-endpoint-identity-lifecycle.md` and
+/// `m0-trusted-bootstrap-and-server-fingerprint-contract.md` require them to
+/// be. Only the dimensions WP1 actually implements are represented here;
 /// hardware-confidence state is a separate, not-yet-implemented dimension
 /// and is out of WP1's scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
