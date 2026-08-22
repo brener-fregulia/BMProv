@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use bamep_trusted_bootstrap::ServerCertFingerprint;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use tokio::net::TcpStream;
@@ -36,6 +37,8 @@ pub const SUPPORTED_TLS_VERSIONS: &[&rustls::SupportedProtocolVersion] = &[&rust
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentTransportError {
+    #[error("TLS certificate chain is empty")]
+    EmptyCertificateChain,
     #[error("failed to build TLS server configuration")]
     TlsConfig(#[source] rustls::Error),
     #[error("TLS handshake failed")]
@@ -50,6 +53,25 @@ pub enum AgentTransportError {
 /// identity being stable across ordinary restarts.
 pub struct AgentTransportAcceptor {
     tls_acceptor: TlsAcceptor,
+    server_fingerprint: ServerCertFingerprint,
+}
+
+pub struct AcceptedAgentConnection {
+    pub websocket: WebSocketStream<TlsStream<TcpStream>>,
+    pub server_fingerprint: ServerCertFingerprint,
+}
+
+impl std::ops::Deref for AcceptedAgentConnection {
+    type Target = WebSocketStream<TlsStream<TcpStream>>;
+    fn deref(&self) -> &Self::Target {
+        &self.websocket
+    }
+}
+
+impl std::ops::DerefMut for AcceptedAgentConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.websocket
+    }
 }
 
 impl AgentTransportAcceptor {
@@ -62,6 +84,10 @@ impl AgentTransportAcceptor {
         cert_chain: Vec<CertificateDer<'static>>,
         private_key: PrivateKeyDer<'static>,
     ) -> Result<Self, AgentTransportError> {
+        let leaf = cert_chain
+            .first()
+            .ok_or(AgentTransportError::EmptyCertificateChain)?;
+        let server_fingerprint = ServerCertFingerprint::from_leaf_der(leaf.as_ref());
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(SUPPORTED_TLS_VERSIONS)
@@ -72,6 +98,7 @@ impl AgentTransportAcceptor {
 
         Ok(Self {
             tls_acceptor: TlsAcceptor::from(Arc::new(config)),
+            server_fingerprint,
         })
     }
 
@@ -82,7 +109,7 @@ impl AgentTransportAcceptor {
     pub async fn accept(
         &self,
         stream: TcpStream,
-    ) -> Result<WebSocketStream<TlsStream<TcpStream>>, AgentTransportError> {
+    ) -> Result<AcceptedAgentConnection, AgentTransportError> {
         let tls_stream = self
             .tls_acceptor
             .accept(stream)
@@ -93,7 +120,10 @@ impl AgentTransportAcceptor {
             .await
             .map_err(AgentTransportError::WebSocketUpgrade)?;
 
-        Ok(ws_stream)
+        Ok(AcceptedAgentConnection {
+            websocket: ws_stream,
+            server_fingerprint: self.server_fingerprint,
+        })
     }
 }
 

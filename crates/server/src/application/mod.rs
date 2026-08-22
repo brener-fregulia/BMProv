@@ -8,12 +8,14 @@
 
 use std::sync::Arc;
 
+use bamep_agent_protocol::BootstrapEvidenceMessage;
 use bamep_domain::credential::CredentialHash;
 use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
 use bamep_domain::{
     transitions, Actor, BootContext, BootNonce, EndpointId, InvalidIdentityTransition,
     DEFAULT_CREDENTIAL_TTL,
 };
+use bamep_trusted_bootstrap::{AcceptedSiteKeys, BootstrapAssertion, ServerCertFingerprint};
 use chrono::{DateTime, Duration, Utc};
 
 use crate::ports::{
@@ -78,6 +80,65 @@ pub enum RedeemResult {
         credential_expires_at: DateTime<Utc>,
     },
     Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapEvidenceResult {
+    Established,
+    Rejected,
+}
+
+/// Independently verifies post-session evidence and correlates it to the
+/// authoritative CurrentBoot under the Endpoint lock.
+pub struct BootstrapEvidenceService<R: EndpointRepository> {
+    repo: Arc<R>,
+    accepted_site_keys: AcceptedSiteKeys,
+}
+
+impl<R: EndpointRepository> BootstrapEvidenceService<R> {
+    pub fn new(repo: Arc<R>, accepted_site_keys: AcceptedSiteKeys) -> Self {
+        Self {
+            repo,
+            accepted_site_keys,
+        }
+    }
+
+    pub async fn verify_and_establish(
+        &self,
+        endpoint_id: EndpointId,
+        evidence: &BootstrapEvidenceMessage,
+        connection_fingerprint: ServerCertFingerprint,
+    ) -> Result<BootstrapEvidenceResult, ApplicationError> {
+        let Ok(declared_nonce) = BootNonce::parse_wire_value(&evidence.body.boot_nonce) else {
+            return Ok(BootstrapEvidenceResult::Rejected);
+        };
+        let Ok(assertion) =
+            BootstrapAssertion::parse_wire_value(&evidence.body.bootstrap_assertion)
+        else {
+            return Ok(BootstrapEvidenceResult::Rejected);
+        };
+        let Ok(verified) = assertion.verify(&self.accepted_site_keys) else {
+            return Ok(BootstrapEvidenceResult::Rejected);
+        };
+        if verified.boot_nonce() != declared_nonce
+            || verified.server_fingerprint() != connection_fingerprint
+        {
+            return Ok(BootstrapEvidenceResult::Rejected);
+        }
+        let decide: crate::ports::TrustedBootstrapDecision = Box::new(move |aggregate| {
+            transitions::establish_trusted_bootstrap(&aggregate, declared_nonce)
+        });
+        let outcome = self
+            .repo
+            .establish_trusted_bootstrap(endpoint_id, decide)
+            .await?;
+        Ok(match outcome {
+            transitions::TrustedBootstrapOutcome::Established(_) => {
+                BootstrapEvidenceResult::Established
+            }
+            transitions::TrustedBootstrapOutcome::Rejected => BootstrapEvidenceResult::Rejected,
+        })
+    }
 }
 
 /// Boot Orchestration's Application-level responsibility

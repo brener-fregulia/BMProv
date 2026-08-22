@@ -9,6 +9,7 @@
 //! this module, so an Application-layer caller can never hand-assemble a
 //! domain aggregate into an invariant-violating shape.
 
+use bamep_trusted_bootstrap::BootNonce;
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 
@@ -51,6 +52,36 @@ pub enum RedeemOutcome {
         resolved_boot_context: Option<BootContext>,
     },
     Rejected,
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum TrustedBootstrapOutcome {
+    Established(TransitionOutcome),
+    Rejected,
+}
+
+/// Establishes trust only for the freshly-read current boot. Rejection and
+/// idempotence are pure Domain outcomes; no event or audit record exists for
+/// this WP1 transition.
+pub fn establish_trusted_bootstrap(
+    aggregate: &EndpointAggregate,
+    verified_current_nonce: BootNonce,
+) -> TrustedBootstrapOutcome {
+    let Some(current_boot) = aggregate.current_boot.as_ref() else {
+        return TrustedBootstrapOutcome::Rejected;
+    };
+    if current_boot.boot_nonce() != verified_current_nonce {
+        return TrustedBootstrapOutcome::Rejected;
+    }
+    TrustedBootstrapOutcome::Established(TransitionOutcome {
+        endpoint: EndpointAggregate {
+            current_boot: Some(current_boot.establish_trusted_bootstrap()),
+            ..aggregate.clone()
+        },
+        events: vec![],
+        audit: None,
+    })
 }
 
 /// Verifies `presented` against `context` the way both `first_contact` and
@@ -1005,5 +1036,99 @@ mod tests {
             revoked.endpoint.current_boot, current_boot_before,
             "credential revocation must not disturb CurrentBoot"
         );
+    }
+
+    #[test]
+    fn matching_current_boot_establishes_trust_and_is_idempotent() {
+        let nonce = BootNonce::from_bytes([0x41; 32]);
+        let (context, e1) =
+            issue_boot_context_with_nonce("mac:trust", nonce, now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome: first, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let TrustedBootstrapOutcome::Established(established) =
+            establish_trusted_bootstrap(&first.endpoint, nonce)
+        else {
+            panic!()
+        };
+        assert_eq!(
+            established
+                .endpoint
+                .current_boot
+                .as_ref()
+                .unwrap()
+                .trusted_bootstrap(),
+            TrustedBootstrapState::Established
+        );
+        let TrustedBootstrapOutcome::Established(repeated) =
+            establish_trusted_bootstrap(&established.endpoint, nonce)
+        else {
+            panic!()
+        };
+        assert_eq!(repeated.endpoint, established.endpoint);
+        assert!(repeated.events.is_empty());
+        assert!(repeated.audit.is_none());
+    }
+
+    #[test]
+    fn historical_nonce_is_rejected_without_mutation() {
+        let nonce = BootNonce::from_bytes([0x42; 32]);
+        let (context, e1) =
+            issue_boot_context_with_nonce("mac:historical", nonce, now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert!(matches!(
+            establish_trusted_bootstrap(&outcome.endpoint, BootNonce::from_bytes([0x43; 32])),
+            TrustedBootstrapOutcome::Rejected
+        ));
+        assert_eq!(
+            outcome
+                .endpoint
+                .current_boot
+                .as_ref()
+                .unwrap()
+                .trusted_bootstrap(),
+            TrustedBootstrapState::NotEstablished
+        );
+    }
+
+    #[test]
+    fn missing_current_boot_is_rejected() {
+        let nonce = BootNonce::from_bytes([0x44; 32]);
+        let (context, e1) =
+            issue_boot_context_with_nonce("mac:none", nonce, now(), Duration::minutes(5));
+        let RedeemOutcome::Established { outcome, .. } = first_contact(
+            &context,
+            &e1,
+            &fresh_runtime(),
+            now(),
+            DEFAULT_CREDENTIAL_TTL,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let aggregate = EndpointAggregate {
+            current_boot: None,
+            ..outcome.endpoint
+        };
+        assert!(matches!(
+            establish_trusted_bootstrap(&aggregate, nonce),
+            TrustedBootstrapOutcome::Rejected
+        ));
     }
 }

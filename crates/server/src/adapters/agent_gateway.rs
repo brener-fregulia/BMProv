@@ -26,11 +26,14 @@ use tokio_tungstenite::WebSocketStream;
 
 use bamep_agent_protocol::{
     decode, encode, AgentProtocolMessage, AuthErrorMessage, AuthRequestMessage, MessageTimestamp,
-    ProtocolId, SessionEstablishedMessage,
+    ProtocolErrorMessage, ProtocolId, SessionEstablishedMessage,
 };
 use bamep_domain::EndpointId;
+use bamep_trusted_bootstrap::ServerCertFingerprint;
 
-use crate::application::{ApplicationError, EnrollmentService, RedeemResult};
+use crate::application::{
+    ApplicationError, BootstrapEvidenceService, EnrollmentService, RedeemResult,
+};
 use crate::ports::{CredentialRedemptionRepository, EndpointRepository};
 
 /// Agent Protocol v1 currently defines no richer closed `AuthError` reason
@@ -41,6 +44,8 @@ use crate::ports::{CredentialRedemptionRepository, EndpointRepository};
 /// this single value. Callers must never encode parser/serde/Application
 /// detail into a richer reason.
 const GENERIC_AUTH_ERROR_REASON: &str = "rejected";
+pub const GENERIC_PROTOCOL_ERROR_CODE: &str = "GENERIC";
+pub const GENERIC_PROTOCOL_ERROR_MESSAGE: &str = "protocol violation";
 
 /// The result of a successful Agent Protocol v1 handshake. `session_id` is a
 /// fresh, transient value — not persisted to PostgreSQL in WP1 (no session
@@ -72,6 +77,8 @@ pub enum AgentGatewayError {
     Send(#[source] tokio_tungstenite::tungstenite::Error),
     #[error("the connection closed before the handshake completed")]
     ConnectionClosed,
+    #[error("authenticated session requires a configured BootstrapEvidenceService")]
+    BootstrapEvidenceServiceNotConfigured,
     #[error(transparent)]
     Application(#[from] ApplicationError),
 }
@@ -84,11 +91,100 @@ pub enum AgentGatewayError {
 /// handshake is retained here.
 pub struct AgentControlGateway<R: EndpointRepository, C: CredentialRedemptionRepository> {
     enrollment: Arc<EnrollmentService<R, C>>,
+    bootstrap_evidence: Option<Arc<BootstrapEvidenceService<R>>>,
 }
 
 impl<R: EndpointRepository, C: CredentialRedemptionRepository> AgentControlGateway<R, C> {
     pub fn new(enrollment: Arc<EnrollmentService<R, C>>) -> Self {
-        Self { enrollment }
+        Self {
+            enrollment,
+            bootstrap_evidence: None,
+        }
+    }
+
+    pub fn with_bootstrap_evidence_service(
+        mut self,
+        service: Arc<BootstrapEvidenceService<R>>,
+    ) -> Self {
+        self.bootstrap_evidence = Some(service);
+        self
+    }
+
+    /// Runs the authenticated post-handshake phase on the same WebSocket.
+    /// Evidence rejection is deliberately silent and non-terminal.
+    pub async fn run_authenticated_session<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+        session: AuthenticatedSession,
+        connection_fingerprint: ServerCertFingerprint,
+    ) -> Result<(), AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let bootstrap_evidence = self
+            .bootstrap_evidence
+            .as_ref()
+            .ok_or(AgentGatewayError::BootstrapEvidenceServiceNotConfigured)?;
+        loop {
+            let Some(frame) = websocket.next().await else {
+                return Ok(());
+            };
+            let frame = frame.map_err(AgentGatewayError::Receive)?;
+            match frame {
+                Message::Close(_) => return Ok(()),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Binary(_) => self.send_protocol_error(websocket, None).await?,
+                Message::Text(text) => {
+                    let Ok(message) = decode(text.as_str()) else {
+                        self.send_protocol_error(websocket, None).await?;
+                        continue;
+                    };
+                    let id = message.envelope().message_id;
+                    if !message.envelope().protocol_version.is_v1() {
+                        self.send_protocol_error(websocket, Some(id)).await?;
+                        continue;
+                    }
+                    match message {
+                        AgentProtocolMessage::BootstrapEvidence(evidence) => {
+                            let _ = bootstrap_evidence
+                                .verify_and_establish(
+                                    session.endpoint_id,
+                                    &evidence,
+                                    connection_fingerprint,
+                                )
+                                .await?;
+                        }
+                        AgentProtocolMessage::ProtocolError(_) => {}
+                        AgentProtocolMessage::AuthRequest(_)
+                        | AgentProtocolMessage::SessionEstablished(_)
+                        | AgentProtocolMessage::AuthError(_) => {
+                            self.send_protocol_error(websocket, Some(id)).await?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn send_protocol_error<S>(
+        &self,
+        websocket: &mut WebSocketStream<S>,
+        correlation_id: Option<ProtocolId>,
+    ) -> Result<(), AgentGatewayError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut error =
+            ProtocolErrorMessage::new(GENERIC_PROTOCOL_ERROR_CODE, GENERIC_PROTOCOL_ERROR_MESSAGE);
+        if let Some(id) = correlation_id {
+            error = error.with_correlation_id(id);
+        }
+        let wire = encode(&AgentProtocolMessage::ProtocolError(error))
+            .expect("a well-formed ProtocolError always encodes");
+        websocket
+            .send(Message::text(wire))
+            .await
+            .map_err(AgentGatewayError::Send)
     }
 
     /// Drives the Agent Protocol v1 handshake phase on an already-established

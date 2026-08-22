@@ -71,4 +71,11 @@ impl CurrentBoot {
     pub fn trusted_bootstrap(&self) -> TrustedBootstrapState {
         self.trusted_bootstrap
     }
+
+    pub(crate) fn establish_trusted_bootstrap(&self) -> Self {
+        Self {
+            trusted_bootstrap: TrustedBootstrapState::Established,
+            ..self.clone()
+        }
+    }
 }

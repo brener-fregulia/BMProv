@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use bamep_domain::presented_credential::{CredentialKind, CredentialLookupId};
 use bamep_domain::{
     BootContext, BootContextResolveError, EndpointAggregate, EndpointId, InvalidIdentityTransition,
-    RedeemOutcome, TransitionOutcome,
+    RedeemOutcome, TransitionOutcome, TrustedBootstrapOutcome,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +33,9 @@ pub enum RepositoryError {
 pub type UpdateDecision = Box<
     dyn FnOnce(EndpointAggregate) -> Result<TransitionOutcome, InvalidIdentityTransition> + Send,
 >;
+
+pub type TrustedBootstrapDecision =
+    Box<dyn FnOnce(EndpointAggregate) -> TrustedBootstrapOutcome + Send>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EndpointUpdateError {
@@ -68,6 +71,15 @@ pub trait EndpointRepository: Send + Sync {
         id: EndpointId,
         decide: UpdateDecision,
     ) -> Result<TransitionOutcome, EndpointUpdateError>;
+
+    /// Locks and freshly reads exactly one Endpoint. Accepted (including
+    /// idempotent) outcomes commit atomically; rejection rolls back without
+    /// persistence.
+    async fn establish_trusted_bootstrap(
+        &self,
+        id: EndpointId,
+        decide: TrustedBootstrapDecision,
+    ) -> Result<TrustedBootstrapOutcome, EndpointUpdateError>;
 }
 
 /// Persistence for newly issued `BootContext`s (ADR-0014 point 11

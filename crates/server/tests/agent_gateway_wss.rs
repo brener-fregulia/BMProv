@@ -27,10 +27,15 @@ use bamep_server::adapters::postgres::{
     PostgresBootContextRepository, PostgresCredentialRedemptionRepository,
     PostgresEndpointRepository,
 };
-use bamep_server::application::{BootOrchestrationService, EnrollmentService};
-use bamep_simulator::{
-    authenticate, connect_pinned_wss, ServerCertFingerprint, SimulatorHandshakeOutcome,
+use bamep_server::application::{
+    BootOrchestrationService, BootstrapEvidenceService, EnrollmentService,
 };
+use bamep_simulator::{
+    authenticate, connect_after_trusted_bootstrap, connect_pinned_wss, send_bootstrap_evidence,
+    ServerCertFingerprint, SimulatedBootstrapMaterial, SimulatedPairedTrust,
+    SimulatorHandshakeOutcome, TrustedBootstrapFixtureIssuer,
+};
+use bamep_trusted_bootstrap::AcceptedSiteKeys;
 use chrono::{Duration, Utc};
 use futures_util::{SinkExt, StreamExt};
 use rcgen::{generate_simple_self_signed, CertifiedKey};
@@ -78,7 +83,14 @@ async fn issue_e1(boot: &BootOrchestration, signal: &str) -> PresentedCredential
 async fn valid_auth_request_over_real_wss_reaches_session_established() {
     let db = TestDatabase::setup().await;
     let (boot, enrollment) = build_services(db.pool.clone());
-    let gateway = Arc::new(Gateway::new(Arc::clone(&enrollment)));
+    let issuer = TrustedBootstrapFixtureIssuer::from_seed([0x31; 32]);
+    let evidence_service = Arc::new(BootstrapEvidenceService::new(
+        Arc::new(PostgresEndpointRepository::new(db.pool.clone())),
+        AcceptedSiteKeys::single(issuer.public_key()),
+    ));
+    let gateway = Arc::new(
+        Gateway::new(Arc::clone(&enrollment)).with_bootstrap_evidence_service(evidence_service),
+    );
 
     let (cert_der, key_der) = generate_test_cert("localhost");
     let expected_fingerprint = ServerCertFingerprint::from_leaf_der(cert_der.as_ref());
@@ -89,16 +101,33 @@ async fn valid_auth_request_over_real_wss_reaches_session_established() {
     let server_gateway = Arc::clone(&gateway);
     let server_task = tokio::spawn(async move {
         let (tcp_stream, _peer) = listener.accept().await.expect("accept tcp");
-        let mut ws_stream = acceptor.accept(tcp_stream).await.expect("tls+ws accept");
-        server_gateway.handshake(&mut ws_stream).await
+        let mut connection = acceptor.accept(tcp_stream).await.expect("tls+ws accept");
+        let outcome = server_gateway.handshake(&mut connection.websocket).await?;
+        if let HandshakeOutcome::Established(session) = &outcome {
+            server_gateway
+                .run_authenticated_session(
+                    &mut connection.websocket,
+                    *session,
+                    connection.server_fingerprint,
+                )
+                .await?;
+        }
+        Ok::<_, bamep_server::adapters::agent_gateway::AgentGatewayError>(outcome)
     });
 
-    let mut client_ws = connect_pinned_wss(addr, "localhost", expected_fingerprint)
+    let nonce = bamep_domain::BootNonce::from_bytes([0x51; 32]);
+    let assertion = issuer.issue(nonce, expected_fingerprint);
+    let material = SimulatedBootstrapMaterial::from_assertion(&assertion);
+    let paired = SimulatedPairedTrust::single(issuer.public_key());
+    let mut connection =
+        connect_after_trusted_bootstrap(addr, "localhost", &paired, nonce, &material)
+            .await
+            .expect("local trust then pinned WSS succeeds");
+    let e1 = boot
+        .issue_enrollment_credential("wss-established-01", nonce, Utc::now())
         .await
-        .expect("pinned wss connect must succeed for the matching certificate");
-
-    let e1 = issue_e1(&boot, "wss-established-01").await;
-    let outcome = authenticate(&mut client_ws, &e1.to_wire_value())
+        .unwrap();
+    let outcome = authenticate(&mut connection.websocket, &e1.to_wire_value())
         .await
         .expect("Simulator handshake helper must not error on a valid AuthRequest");
 
@@ -106,12 +135,24 @@ async fn valid_auth_request_over_real_wss_reaches_session_established() {
         panic!("expected Established, got {outcome:?}");
     };
     assert!(!established.body.runtime_credential.is_empty());
+    send_bootstrap_evidence(&mut connection.websocket, &connection.established)
+        .await
+        .unwrap();
+    connection.websocket.close(None).await.unwrap();
 
     let server_outcome = server_task
         .await
         .expect("server task must not panic")
         .expect("server-side Gateway handshake must succeed");
     assert!(matches!(server_outcome, HandshakeOutcome::Established(_)));
+    let row: (String, String) = sqlx::query_as(
+        "SELECT identity_state::text, trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-established-01")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(row, ("PendingEnrollment".into(), "Established".into()));
 
     db.teardown().await;
 }

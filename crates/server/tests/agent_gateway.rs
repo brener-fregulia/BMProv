@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use bamep_agent_protocol::{
     decode, encode, AgentProtocolMessage, AuthRequestMessage, BootstrapEvidenceMessage, Envelope,
-    ProtocolVersion,
+    ProtocolErrorMessage, ProtocolVersion,
 };
 use bamep_domain::presented_credential::{CredentialKind, PresentedCredential};
 use bamep_server::adapters::agent_gateway::{
@@ -32,8 +32,11 @@ use bamep_server::adapters::postgres::{
     PostgresEndpointRepository,
 };
 use bamep_server::application::{
-    ApplicationError, BootOrchestrationService, Clock, EnrollmentService, RedeemResult,
+    ApplicationError, BootOrchestrationService, BootstrapEvidenceService, Clock, EnrollmentService,
+    RedeemResult,
 };
+use bamep_trusted_bootstrap::ServerCertFingerprint;
+use bamep_trusted_bootstrap::{fixture::FixtureAssertionSigner, AcceptedSiteKeys};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::PgPool;
@@ -141,6 +144,85 @@ async fn recv_message(ws: &mut WebSocketStream<tokio::io::DuplexStream>) -> Agen
         .expect("a frame is present")
         .expect("frame read ok");
     decode(frame.into_text().expect("text frame").as_str()).expect("decode message")
+}
+
+#[tokio::test]
+async fn authenticated_session_reports_wire_violations_but_keeps_invalid_evidence_silent() {
+    let db = TestDatabase::setup().await;
+    let clock = Arc::new(ManualClock::new(Utc::now()));
+    let (boot, enrollment) =
+        build_services(db.pool.clone(), Arc::clone(&clock), Duration::minutes(10));
+    let signer = FixtureAssertionSigner::from_seed([9; 32]);
+    let evidence = Arc::new(BootstrapEvidenceService::new(
+        Arc::new(PostgresEndpointRepository::new(db.pool.clone())),
+        AcceptedSiteKeys::single(signer.public_key()),
+    ));
+    let gateway =
+        Arc::new(Gateway::new(Arc::clone(&enrollment)).with_bootstrap_evidence_service(evidence));
+    let e1 = issue_e1(&boot, "gw-session-violations", clock.now()).await;
+    let (mut client_ws, mut server_ws) = websocket_pair().await;
+    let request = AuthRequestMessage::new(e1.to_wire_value());
+    send_text(
+        &mut client_ws,
+        encode(&AgentProtocolMessage::AuthRequest(request)).unwrap(),
+    )
+    .await;
+    let HandshakeOutcome::Established(session) = gateway.handshake(&mut server_ws).await.unwrap()
+    else {
+        panic!()
+    };
+    let _ = recv_message(&mut client_ws).await;
+    let server_gateway = Arc::clone(&gateway);
+    let task = tokio::spawn(async move {
+        server_gateway
+            .run_authenticated_session(
+                &mut server_ws,
+                session,
+                ServerCertFingerprint::from_sha256_digest([1; 32]),
+            )
+            .await
+    });
+
+    for frame in [
+        Message::text("{"),
+        Message::text(
+            r#"{"type":"Unknown","message_id":"3fa85f64-5717-4562-b3fc-2c963f66afa6","protocol_version":"1","timestamp":"2026-08-14T21:00:00Z"}"#,
+        ),
+        Message::binary(vec![1, 2, 3]),
+        Message::text(
+            encode(&AgentProtocolMessage::AuthRequest(AuthRequestMessage::new(
+                "again",
+            )))
+            .unwrap(),
+        ),
+    ] {
+        client_ws.send(frame).await.unwrap();
+        let AgentProtocolMessage::ProtocolError(error) = recv_message(&mut client_ws).await else {
+            panic!()
+        };
+        assert_eq!(error.body.code, "GENERIC");
+        assert_eq!(error.body.message, "protocol violation");
+    }
+
+    let invalid = BootstrapEvidenceMessage::new("not-a-nonce", "not-an-assertion");
+    send_text(
+        &mut client_ws,
+        encode(&AgentProtocolMessage::BootstrapEvidence(invalid)).unwrap(),
+    )
+    .await;
+    send_text(&mut client_ws, "{".to_string()).await;
+    assert!(matches!(recv_message(&mut client_ws).await, AgentProtocolMessage::ProtocolError(_)),
+        "invalid evidence emitted no response and the following violation proves the session stayed alive");
+
+    let inbound = ProtocolErrorMessage::new("GENERIC", "protocol violation");
+    send_text(
+        &mut client_ws,
+        encode(&AgentProtocolMessage::ProtocolError(inbound)).unwrap(),
+    )
+    .await;
+    client_ws.close(None).await.unwrap();
+    task.await.unwrap().unwrap();
+    db.teardown().await;
 }
 
 #[tokio::test]

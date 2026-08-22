@@ -214,6 +214,41 @@ pub struct BootstrapEvidenceMessage {
     pub body: BootstrapEvidenceBody,
 }
 
+// ---------------------------------------------------------------------
+// ProtocolError — bidirectional post-session protocol violation
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolErrorBody {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolErrorMessage {
+    #[serde(flatten)]
+    pub envelope: Envelope,
+    #[serde(flatten)]
+    pub body: ProtocolErrorBody,
+}
+
+impl ProtocolErrorMessage {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            envelope: Envelope::new(),
+            body: ProtocolErrorBody {
+                code: code.into(),
+                message: message.into(),
+            },
+        }
+    }
+
+    pub fn with_correlation_id(mut self, correlation_id: ProtocolId) -> Self {
+        self.envelope = self.envelope.with_correlation_id(correlation_id);
+        self
+    }
+}
+
 impl fmt::Debug for BootstrapEvidenceMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BootstrapEvidenceMessage")
@@ -261,6 +296,7 @@ pub enum AgentProtocolMessage {
     SessionEstablished(SessionEstablishedMessage),
     AuthError(AuthErrorMessage),
     BootstrapEvidence(BootstrapEvidenceMessage),
+    ProtocolError(ProtocolErrorMessage),
 }
 
 impl AgentProtocolMessage {
@@ -270,6 +306,7 @@ impl AgentProtocolMessage {
             AgentProtocolMessage::SessionEstablished(m) => &m.envelope,
             AgentProtocolMessage::AuthError(m) => &m.envelope,
             AgentProtocolMessage::BootstrapEvidence(m) => &m.envelope,
+            AgentProtocolMessage::ProtocolError(m) => &m.envelope,
         }
     }
 }

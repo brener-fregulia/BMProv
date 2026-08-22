@@ -6,7 +6,7 @@
 
 use bamep_agent_protocol::{
     codec, AgentProtocolMessage, AuthErrorMessage, AuthRequestMessage, BootstrapEvidenceMessage,
-    Envelope, LocalBootTrust, ProtocolId, SessionEstablishedMessage,
+    Envelope, LocalBootTrust, ProtocolErrorMessage, ProtocolId, SessionEstablishedMessage,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -427,4 +427,21 @@ fn timestamps_are_json_strings_not_numbers() {
         value["credential_expires_at"].is_string(),
         "credential_expires_at must be a string, got {value}"
     );
+}
+
+#[test]
+fn protocol_error_has_normative_flat_wire_shape_and_optional_correlation() {
+    let correlation = ProtocolId::generate();
+    let message =
+        ProtocolErrorMessage::new("GENERIC", "protocol violation").with_correlation_id(correlation);
+    let json = codec::encode(&AgentProtocolMessage::ProtocolError(message)).unwrap();
+    let value: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["type"], "ProtocolError");
+    assert_eq!(value["code"], "GENERIC");
+    assert_eq!(value["message"], "protocol violation");
+    assert_eq!(value["correlation_id"], correlation.to_string());
+    assert!(matches!(
+        codec::decode(&json).unwrap(),
+        AgentProtocolMessage::ProtocolError(_)
+    ));
 }

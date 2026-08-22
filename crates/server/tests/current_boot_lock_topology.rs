@@ -74,22 +74,14 @@ async fn endpoint_only_update_succeeds_while_boot_context_row_remains_locked() {
     let locked_id: Vec<u8> = locked_row.try_get("boot_context_id").unwrap();
     assert_eq!(locked_id, boot_context_id);
 
-    // 4. T2: a separate connection/transaction (sqlx's pool hands out a
-    // distinct physical connection since T1's connection is checked out and
-    // held open), updating only Endpoint state. A small lock_timeout turns
-    // any unexpected blocking into a prompt, diagnosable failure rather than
-    // a hang — it is a watchdog, not the pass condition.
-    let mut t2 = db
-        .pool
-        .begin()
-        .await
-        .expect("begin T2 on a separate connection");
+    // 4. T2 updates only Endpoint state on a separate connection.
+    let mut t2 = db.pool.begin().await.expect("begin T2");
     sqlx::query("SET LOCAL lock_timeout = '2s'")
         .execute(&mut *t2)
         .await
-        .expect("set T2's lock_timeout watchdog");
+        .expect("set lock watchdog");
 
-    // 5. The Endpoint-only UPDATE must complete successfully while T1 still
+    // 5. The Endpoint-only update must complete successfully while T1 still
     // holds BootContext A's row lock. If any foreign key, trigger, or lookup
     // implicitly locked boot_contexts,
     // this statement would block until lock_timeout fires and return an
@@ -108,7 +100,6 @@ async fn endpoint_only_update_succeeds_while_boot_context_row_remains_locked() {
         update_result.err()
     );
     assert_eq!(update_result.unwrap().rows_affected(), 1);
-
     t2.commit().await.expect("commit T2");
 
     // T1 never wrote anything; release its lock explicitly rather than

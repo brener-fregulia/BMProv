@@ -134,6 +134,7 @@ impl BootstrapAssertion {
     /// internal only: the fixture signer is the sole caller, so an
     /// externally-supplied unchecked assertion can never bypass
     /// [`BootstrapAssertion::parse_wire_value`]'s strict parsing.
+    #[cfg_attr(not(any(test, feature = "fixture-signing")), allow(dead_code))]
     pub(crate) fn from_signed_transcript(
         transcript: [u8; TRANSCRIPT_LEN],
         signature: [u8; SIGNATURE_LEN],
@@ -147,6 +148,7 @@ impl BootstrapAssertion {
 
 /// Builds the exact 133-byte V1 signed transcript. Shared by the fixture
 /// signer (to sign it) and by parsing (to reconstruct it for verification).
+#[cfg_attr(not(any(test, feature = "fixture-signing")), allow(dead_code))]
 pub(crate) fn build_transcript_v1(
     boot_nonce: &[u8; 32],
     server_fingerprint: &[u8; 32],

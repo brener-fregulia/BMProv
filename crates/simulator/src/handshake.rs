@@ -16,8 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use bamep_agent_protocol::{
-    decode, encode, AgentProtocolMessage, AuthErrorMessage, AuthRequestMessage, DecodeError,
-    SessionEstablishedMessage,
+    decode, encode, AgentProtocolMessage, AuthErrorMessage, AuthRequestMessage,
+    BootstrapEvidenceMessage, DecodeError, SessionEstablishedMessage,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +38,25 @@ pub enum SimulatorHandshakeError {
     UnsupportedProtocolVersion,
     #[error("the handshake response correlation_id is missing or does not match the AuthRequest")]
     CorrelationMismatch,
+}
+
+pub async fn send_bootstrap_evidence<S>(
+    websocket: &mut WebSocketStream<S>,
+    established: &crate::trusted_bootstrap::EstablishedTrustedBootstrap,
+) -> Result<(), SimulatorHandshakeError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let evidence = BootstrapEvidenceMessage::new(
+        established.boot_nonce().to_wire_value(),
+        established.assertion_wire_value(),
+    );
+    let wire = encode(&AgentProtocolMessage::BootstrapEvidence(evidence))
+        .expect("established bootstrap evidence always encodes");
+    websocket
+        .send(Message::text(wire))
+        .await
+        .map_err(SimulatorHandshakeError::Send)
 }
 
 /// The Simulator's own view of a handshake result: either message, carried

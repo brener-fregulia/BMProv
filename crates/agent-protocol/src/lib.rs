@@ -23,6 +23,6 @@ pub use codec::{decode, encode, DecodeError, EncodeError};
 pub use envelope::{Envelope, MessageTimestamp, ProtocolId, ProtocolIdError, ProtocolVersion};
 pub use messages::{
     AgentProtocolMessage, AuthErrorBody, AuthErrorMessage, AuthRequestBody, AuthRequestMessage,
-    BootstrapEvidenceBody, BootstrapEvidenceMessage, LocalBootTrust, SessionEstablishedBody,
-    SessionEstablishedMessage,
+    BootstrapEvidenceBody, BootstrapEvidenceMessage, LocalBootTrust, ProtocolErrorBody,
+    ProtocolErrorMessage, SessionEstablishedBody, SessionEstablishedMessage,
 };

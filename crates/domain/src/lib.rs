@@ -24,4 +24,4 @@ pub use current_boot::{CurrentBoot, TrustedBootstrapState};
 pub use endpoint::{EndpointAggregate, EndpointId};
 pub use events::{Actor, AuditRecord, DomainEvent, TransitionOutcome};
 pub use identity::{IdentityState, InvalidIdentityTransition};
-pub use transitions::RedeemOutcome;
+pub use transitions::{RedeemOutcome, TrustedBootstrapOutcome};

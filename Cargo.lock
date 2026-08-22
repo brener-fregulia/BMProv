@@ -116,6 +116,7 @@ dependencies = [
  "bamep-agent-protocol",
  "bamep-domain",
  "bamep-simulator",
+ "bamep-trusted-bootstrap",
  "chrono",
  "futures-util",
  "rcgen",

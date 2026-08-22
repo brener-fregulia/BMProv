@@ -8,11 +8,14 @@
 //! `super::credential_redemption_repository`.
 
 use async_trait::async_trait;
-use bamep_domain::{EndpointAggregate, EndpointId, TransitionOutcome};
+use bamep_domain::{EndpointAggregate, EndpointId, TransitionOutcome, TrustedBootstrapOutcome};
 use sqlx::PgPool;
 
 use super::shared::{find_by_id, load_by_id_for_update, persist_transition, to_backend_err};
-use crate::ports::{EndpointRepository, EndpointUpdateError, RepositoryError, UpdateDecision};
+use crate::ports::{
+    EndpointRepository, EndpointUpdateError, RepositoryError, TrustedBootstrapDecision,
+    UpdateDecision,
+};
 
 pub struct PostgresEndpointRepository {
     pool: PgPool,
@@ -70,6 +73,44 @@ impl EndpointRepository for PostgresEndpointRepository {
                     .await
                     .map_err(|e| EndpointUpdateError::Repository(to_backend_err(e)))?;
                 Err(EndpointUpdateError::InvalidTransition(invalid))
+            }
+        }
+    }
+
+    async fn establish_trusted_bootstrap(
+        &self,
+        id: EndpointId,
+        decide: TrustedBootstrapDecision,
+    ) -> Result<TrustedBootstrapOutcome, EndpointUpdateError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| EndpointUpdateError::Repository(to_backend_err(e)))?;
+        let Some(aggregate) = load_by_id_for_update(&mut tx, id)
+            .await
+            .map_err(EndpointUpdateError::Repository)?
+        else {
+            tx.rollback()
+                .await
+                .map_err(|e| EndpointUpdateError::Repository(to_backend_err(e)))?;
+            return Err(EndpointUpdateError::NotFound(id));
+        };
+        match decide(aggregate) {
+            TrustedBootstrapOutcome::Established(outcome) => {
+                persist_transition(&mut tx, &outcome)
+                    .await
+                    .map_err(EndpointUpdateError::Repository)?;
+                tx.commit()
+                    .await
+                    .map_err(|e| EndpointUpdateError::Repository(to_backend_err(e)))?;
+                Ok(TrustedBootstrapOutcome::Established(outcome))
+            }
+            TrustedBootstrapOutcome::Rejected => {
+                tx.rollback()
+                    .await
+                    .map_err(|e| EndpointUpdateError::Repository(to_backend_err(e)))?;
+                Ok(TrustedBootstrapOutcome::Rejected)
             }
         }
     }
