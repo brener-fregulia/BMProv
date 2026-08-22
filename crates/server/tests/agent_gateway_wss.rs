@@ -137,6 +137,18 @@ async fn valid_auth_request_over_real_wss_reaches_session_established() {
         panic!("expected Established, got {outcome:?}");
     };
     assert!(!established.body.runtime_credential.is_empty());
+    let before_evidence: (String, String) = sqlx::query_as(
+        "SELECT identity_state::text, trusted_bootstrap_state::text FROM endpoints WHERE inventory_signal = $1",
+    )
+    .bind("wss-established-01")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        before_evidence,
+        ("PendingEnrollment".into(), "NotEstablished".into()),
+        "SessionEstablished must precede and remain independent from BootstrapEvidence"
+    );
     send_bootstrap_evidence(&mut connection.websocket, &connection.established)
         .await
         .unwrap();
@@ -455,6 +467,221 @@ async fn old_boot_a_evidence_cannot_establish_authenticated_boot_b_session() {
         after,
         (nonce_b.as_bytes().to_vec(), "NotEstablished".into())
     );
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn enrolled_endpoint_reconnects_over_fresh_wss_without_second_approval() {
+    let db = TestDatabase::setup().await;
+    let (boot, enrollment) = build_services(db.pool.clone());
+    let gateway = Arc::new(Gateway::new(Arc::clone(&enrollment)));
+    let (cert_der, key_der) = generate_test_cert("localhost");
+    let fingerprint = ServerCertFingerprint::from_leaf_der(cert_der.as_ref());
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let addr = listener.local_addr().unwrap();
+    let acceptor = Arc::new(AgentTransportAcceptor::new(vec![cert_der], key_der).unwrap());
+    let e1 = issue_e1(&boot, "wss-enrolled-reconnect").await;
+
+    let listener_first = Arc::clone(&listener);
+    let acceptor_first = Arc::clone(&acceptor);
+    let gateway_first = Arc::clone(&gateway);
+    let server_first = tokio::spawn(async move {
+        let (tcp, _) = listener_first.accept().await.unwrap();
+        let mut connection = acceptor_first.accept(tcp).await.unwrap();
+        gateway_first.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_first = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Established(first_established) =
+        authenticate(&mut websocket_first, &e1.to_wire_value())
+            .await
+            .unwrap()
+    else {
+        panic!("first contact must establish")
+    };
+    drop(websocket_first);
+    let HandshakeOutcome::Established(first_session) = server_first.await.unwrap().unwrap() else {
+        panic!("Server must establish first session")
+    };
+
+    enrollment
+        .approve_enrollment(
+            first_session.endpoint_id,
+            Actor::Operator {
+                label: "wp1-reconnect-harness".into(),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let approval_events_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM domain_events WHERE endpoint_id = $1 AND event_type = 'EndpointEnrolled'",
+    )
+    .bind(first_session.endpoint_id.0)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(approval_events_before, 1);
+
+    let listener_reconnect = Arc::clone(&listener);
+    let acceptor_reconnect = Arc::clone(&acceptor);
+    let gateway_reconnect = Arc::clone(&gateway);
+    let server_reconnect = tokio::spawn(async move {
+        let (tcp, _) = listener_reconnect.accept().await.unwrap();
+        let mut connection = acceptor_reconnect.accept(tcp).await.unwrap();
+        gateway_reconnect.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_reconnect = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Established(reconnect_established) = authenticate(
+        &mut websocket_reconnect,
+        &first_established.body.runtime_credential,
+    )
+    .await
+    .unwrap() else {
+        panic!("runtime credential reconnect must establish")
+    };
+    assert_ne!(
+        reconnect_established.body.session_id, first_established.body.session_id,
+        "reconnect must establish a fresh session"
+    );
+    drop(websocket_reconnect);
+    let HandshakeOutcome::Established(reconnect_session) = server_reconnect.await.unwrap().unwrap()
+    else {
+        panic!("Server must establish reconnect session")
+    };
+    assert_eq!(reconnect_session.endpoint_id, first_session.endpoint_id);
+
+    let (identity, approval_events_after): (String, i64) = sqlx::query_as(
+        "SELECT e.identity_state::text, (SELECT COUNT(*) FROM domain_events d WHERE d.endpoint_id = e.id AND d.event_type = 'EndpointEnrolled') FROM endpoints e WHERE e.id = $1",
+    )
+    .bind(first_session.endpoint_id.0)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(identity, "Enrolled");
+    assert_eq!(approval_events_after, approval_events_before);
+    db.teardown().await;
+}
+
+#[tokio::test]
+async fn predecessor_retry_replaces_successor_and_recovers_from_superseded_successor_over_wss() {
+    let db = TestDatabase::setup().await;
+    let (boot, enrollment) = build_services(db.pool.clone());
+    let gateway = Arc::new(Gateway::new(enrollment));
+    let (cert_der, key_der) = generate_test_cert("localhost");
+    let fingerprint = ServerCertFingerprint::from_leaf_der(cert_der.as_ref());
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let addr = listener.local_addr().unwrap();
+    let acceptor = Arc::new(AgentTransportAcceptor::new(vec![cert_der], key_der).unwrap());
+    let e1 = issue_e1(&boot, "wss-predecessor-recovery").await;
+
+    let listener_one = Arc::clone(&listener);
+    let acceptor_one = Arc::clone(&acceptor);
+    let gateway_one = Arc::clone(&gateway);
+    let server_one = tokio::spawn(async move {
+        let (tcp, _) = listener_one.accept().await.unwrap();
+        let mut connection = acceptor_one.accept(tcp).await.unwrap();
+        gateway_one.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_one = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Established(established_one) =
+        authenticate(&mut websocket_one, &e1.to_wire_value())
+            .await
+            .unwrap()
+    else {
+        panic!("E1 first authentication must establish")
+    };
+    let r1 = established_one.body.runtime_credential;
+    drop(websocket_one);
+    assert!(matches!(
+        server_one.await.unwrap().unwrap(),
+        HandshakeOutcome::Established(_)
+    ));
+
+    // R1 was delivered but never authenticated. The still-valid predecessor
+    // E1 must replace it with a fresh R1' through the real wire path.
+    let listener_two = Arc::clone(&listener);
+    let acceptor_two = Arc::clone(&acceptor);
+    let gateway_two = Arc::clone(&gateway);
+    let server_two = tokio::spawn(async move {
+        let (tcp, _) = listener_two.accept().await.unwrap();
+        let mut connection = acceptor_two.accept(tcp).await.unwrap();
+        gateway_two.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_two = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Established(established_two) =
+        authenticate(&mut websocket_two, &e1.to_wire_value())
+            .await
+            .unwrap()
+    else {
+        panic!("E1 predecessor retry must establish")
+    };
+    let r1_prime = established_two.body.runtime_credential;
+    assert_ne!(r1_prime, r1);
+    drop(websocket_two);
+    assert!(matches!(
+        server_two.await.unwrap().unwrap(),
+        HandshakeOutcome::Established(_)
+    ));
+
+    // The superseded R1 is rejected generically and never establishes a
+    // session.
+    let listener_three = Arc::clone(&listener);
+    let acceptor_three = Arc::clone(&acceptor);
+    let gateway_three = Arc::clone(&gateway);
+    let server_three = tokio::spawn(async move {
+        let (tcp, _) = listener_three.accept().await.unwrap();
+        let mut connection = acceptor_three.accept(tcp).await.unwrap();
+        gateway_three.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_three = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Rejected(rejected) =
+        authenticate(&mut websocket_three, &r1).await.unwrap()
+    else {
+        panic!("superseded R1 must be rejected")
+    };
+    assert_eq!(rejected.body.reason, "rejected");
+    drop(websocket_three);
+    assert!(matches!(
+        server_three.await.unwrap().unwrap(),
+        HandshakeOutcome::Rejected
+    ));
+
+    // Recovery remains possible with E1, which replaces unconfirmed R1'
+    // with another fresh successor.
+    let listener_four = Arc::clone(&listener);
+    let acceptor_four = Arc::clone(&acceptor);
+    let gateway_four = Arc::clone(&gateway);
+    let server_four = tokio::spawn(async move {
+        let (tcp, _) = listener_four.accept().await.unwrap();
+        let mut connection = acceptor_four.accept(tcp).await.unwrap();
+        gateway_four.handshake(&mut connection.websocket).await
+    });
+    let mut websocket_four = connect_pinned_wss(addr, "localhost", fingerprint)
+        .await
+        .unwrap();
+    let SimulatorHandshakeOutcome::Established(established_four) =
+        authenticate(&mut websocket_four, &e1.to_wire_value())
+            .await
+            .unwrap()
+    else {
+        panic!("E1 recovery retry must establish")
+    };
+    assert_ne!(established_four.body.runtime_credential, r1_prime);
+    drop(websocket_four);
+    assert!(matches!(
+        server_four.await.unwrap().unwrap(),
+        HandshakeOutcome::Established(_)
+    ));
     db.teardown().await;
 }
 
