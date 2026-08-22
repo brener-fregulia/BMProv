@@ -1,24 +1,16 @@
 //! Lock-topology regression test for the CurrentBoot foundation
 //! (`docs/decisions/0014-agent-credential-lookup-and-boot-context-correlation.md`;
 //! `docs/specifications/m0-trusted-bootstrap-and-server-fingerprint-contract.md`
-//! "Authoritative current boot and durable Server state"): proves the
-//! *final* schema (after migration
-//! `0005_remove_current_boot_fk_lock_dependency.sql`) does not silently
-//! reacquire a `boot_contexts` lock during an Endpoint-only update.
+//! "Authoritative current boot and durable Server state"): proves the baseline
+//! schema does not silently acquire a `boot_contexts` lock during an
+//! Endpoint-only update.
 //!
-//! This matters because migration
-//! `0004_current_boot_and_trusted_bootstrap_state.sql` originally added a
-//! composite `(current_boot_context_id, current_boot_nonce)` FOREIGN KEY
-//! referencing `boot_contexts (boot_context_id, boot_nonce)`. PostgreSQL
-//! enforces a referencing-side composite FK via an internal trigger that
-//! takes a `FOR KEY SHARE`-equivalent lock on the referenced row on every
-//! UPDATE touching the referencing columns — with that FK still active, an
-//! Endpoint-only UPDATE already holding the `endpoints` row lock would
-//! therefore implicitly wait on `boot_contexts`, an
-//! `Endpoint -> BootContext` dependency the accepted lock order forbids
-//! (the forthcoming `BootstrapEvidence` transition must operate under
-//! Endpoint lock alone). Migration 0005 removed that FK specifically to
-//! eliminate this dependency.
+//! Endpoint.CurrentBoot is an authoritative projection whose pairing with its
+//! historical BootContext is established by the atomic first-contact or
+//! genuine-reboot flow. Endpoint-only persistence must not use a foreign key,
+//! trigger, lookup, or other mechanism that implicitly introduces the reverse
+//! `Endpoint -> BootContext` lock dependency; the BootstrapEvidence transition
+//! operates under the Endpoint lock alone.
 //!
 //! Requires a real, reachable PostgreSQL instance — see `support::TestDatabase`.
 
@@ -98,8 +90,8 @@ async fn endpoint_only_update_succeeds_while_boot_context_row_remains_locked() {
         .expect("set T2's lock_timeout watchdog");
 
     // 5. The Endpoint-only UPDATE must complete successfully while T1 still
-    // holds BootContext A's row lock. If the removed composite FK (or any
-    // replacement trigger/lookup) still implicitly locked boot_contexts,
+    // holds BootContext A's row lock. If any foreign key, trigger, or lookup
+    // implicitly locked boot_contexts,
     // this statement would block until lock_timeout fires and return an
     // error — a timeout/error here is a test FAILURE, not a pass condition.
     let update_result =

@@ -5,7 +5,7 @@
 //! one statement, so no explicit transaction is needed here.
 //!
 //! `boot_context_id` is the table's `PRIMARY KEY`
-//! (`../../../migrations/0003_boot_context_and_credential_lookup.sql`); this
+//! (`../../../migrations/0001_initial_schema.sql`); this
 //! Adapter issues a plain `INSERT` with no `ON CONFLICT` clause, so a
 //! colliding `boot_context_id` fails the statement instead of overwriting
 //! the existing row.

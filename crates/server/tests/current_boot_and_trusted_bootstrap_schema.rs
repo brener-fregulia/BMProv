@@ -1,24 +1,15 @@
-//! Component/Integration tests proving the FINAL schema left by migrations
-//! `0004_current_boot_and_trusted_bootstrap_state.sql` and
-//! `0005_remove_current_boot_fk_lock_dependency.sql`:
+//! Component/Integration tests for the final current-boot baseline schema:
 //! `boot_contexts.boot_nonce`, the `trusted_bootstrap_state` native enum, and
 //! the nullable all-or-none Endpoint current-boot projection
 //! (`current_boot_context_id`/`current_boot_nonce`/`trusted_bootstrap_state`).
 //!
-//! 0004 originally also added a composite `(boot_context_id, boot_nonce)`
-//! FOREIGN KEY tying the Endpoint projection to its `BootContext` row. 0005
-//! deliberately removed it (and the `UNIQUE` it depended on): PostgreSQL
-//! enforces a referencing-side composite FK via an internal trigger that
-//! takes a `FOR KEY SHARE`-equivalent lock on the referenced `boot_contexts`
-//! row on every Endpoint UPDATE touching those columns — an
-//! `Endpoint -> BootContext` lock dependency the accepted ADR-0014/
-//! trusted-bootstrap lock order forbids. `BootContext` remains the durable
-//! historical issuance/redemption record; `Endpoint.CurrentBoot` remains the
-//! authoritative CURRENT-boot projection; their pairing is established by
-//! the accepted first-contact/genuine-reboot transaction itself, not by a
-//! schema-level FK — see `tests/enrollment_lifecycle.rs` for the tests
-//! proving that transaction writes the exact participating BootContext id
-//! and nonce.
+//! The final schema intentionally has no CurrentBoot-to-BootContext foreign
+//! key or equivalent cross-table mechanism. `BootContext` is the historical
+//! issuance/redemption record; `Endpoint.CurrentBoot` is the authoritative
+//! current projection. Their pairing is established by the accepted atomic
+//! first-contact/genuine-reboot flow, while Endpoint-only updates remain
+//! independent of BootContext locks (ADR-0014 and the trusted-bootstrap
+//! contract).
 //!
 //! This is a schema-only test file (no evidence-processing Adapter behavior
 //! exists yet), so these tests assert PostgreSQL schema invariants directly
@@ -84,25 +75,10 @@ async fn udt_name(pool: &PgPool, table_name: &str, column_name: &str) -> String 
     .unwrap()
 }
 
-async fn constraint_exists(pool: &PgPool, table_name: &str, constraint_name: &str) -> bool {
-    sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM pg_constraint c \
-         JOIN pg_class t ON t.oid = c.conrelid \
-         WHERE t.relname = $1 AND c.conname = $2)",
-    )
-    .bind(table_name)
-    .bind(constraint_name)
-    .fetch_one(pool)
-    .await
-    .unwrap()
-}
-
 #[tokio::test]
-async fn current_boot_columns_exist_and_all_migrations_applied_through_0005() {
+async fn current_boot_columns_exist_and_initial_baseline_is_the_only_migration() {
     let db = TestDatabase::setup().await;
 
-    // Columns from migration 0004, still present after 0005 (which only
-    // drops the FK/UNIQUE pair, never a column or its byte-length CHECK).
     assert_eq!(
         udt_name(&db.pool, "boot_contexts", "boot_nonce").await,
         "bytea"
@@ -120,9 +96,6 @@ async fn current_boot_columns_exist_and_all_migrations_applied_through_0005() {
         "trusted_bootstrap_state"
     );
 
-    // Columns owned by 0001-0003 remain exactly as those migrations left
-    // them — proving 0004/0005 only added to and pruned the schema, never
-    // altered pre-existing columns.
     assert_eq!(
         udt_name(&db.pool, "endpoints", "identity_state").await,
         "endpoint_identity_state"
@@ -137,35 +110,7 @@ async fn current_boot_columns_exist_and_all_migrations_applied_through_0005() {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-    assert_eq!(applied_versions, vec![1, 2, 3, 4, 5]);
-
-    db.teardown().await;
-}
-
-#[tokio::test]
-async fn endpoints_current_boot_fk_does_not_exist_after_migration_0005() {
-    let db = TestDatabase::setup().await;
-
-    assert!(
-        !constraint_exists(&db.pool, "endpoints", "endpoints_current_boot_fk").await,
-        "endpoints_current_boot_fk must be gone from the final schema: keeping it would \
-         reintroduce an Endpoint -> BootContext lock dependency via PostgreSQL's internal \
-         referencing-side FK check trigger"
-    );
-
-    db.teardown().await;
-}
-
-#[tokio::test]
-async fn boot_contexts_id_nonce_unique_does_not_exist_after_migration_0005() {
-    let db = TestDatabase::setup().await;
-
-    assert!(
-        !constraint_exists(&db.pool, "boot_contexts", "boot_contexts_id_nonce_unique").await,
-        "boot_contexts_id_nonce_unique must be gone: it existed only to make the composite \
-         pair referenceable by the now-removed FK, and boot_context_id alone remains the \
-         PRIMARY KEY"
-    );
+    assert_eq!(applied_versions, vec![1]);
 
     db.teardown().await;
 }
@@ -351,18 +296,13 @@ async fn endpoint_current_boot_bad_byte_lengths_are_rejected() {
     db.teardown().await;
 }
 
-/// Migration 0004 originally had a composite FK reject exactly this case.
-/// 0005 deliberately removed it (see this file's module doc comment): the
-/// final schema no longer enforces the Endpoint/BootContext pairing at the
-/// relational level, because doing so required an implicit
-/// `Endpoint -> BootContext` lock the accepted lock order forbids. Schema-
-/// level correctness of the pairing is intentionally NOT re-enforced by any
-/// replacement trigger/FK/runtime lookup — the accepted first-contact/
-/// genuine-reboot transaction is solely responsible for writing CurrentBoot
-/// from the exact BootContext participating in that same transaction,
-/// proved by `tests/enrollment_lifecycle.rs`, not by this constraint.
+/// The final schema intentionally does not enforce Endpoint/BootContext pairing
+/// through a foreign key, trigger, or runtime lookup because Endpoint-only
+/// persistence must not acquire a BootContext lock. The accepted atomic
+/// first-contact/genuine-reboot flow is responsible for writing CurrentBoot
+/// from its participating BootContext.
 #[tokio::test]
-async fn endpoint_current_boot_no_longer_enforces_the_boot_context_pairing_at_the_schema_level() {
+async fn endpoint_current_boot_pairing_is_not_a_cross_table_schema_dependency() {
     let db = TestDatabase::setup().await;
     let endpoint_id = insert_endpoint(&db.pool).await;
 
@@ -380,8 +320,8 @@ async fn endpoint_current_boot_no_longer_enforces_the_boot_context_pairing_at_th
     .execute(&db.pool)
     .await
     .expect(
-        "a current-boot triple with no matching BootContext row must be accepted at the \
-         schema level now that the composite FK is gone",
+        "a structurally complete current-boot triple must not require a BootContext row at \
+         the schema level",
     );
 
     db.teardown().await;

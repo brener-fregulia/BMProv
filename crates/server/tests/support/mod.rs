@@ -78,7 +78,7 @@ pub struct TestDatabase {
 
 impl TestDatabase {
     /// Creates a uniquely named, `bamep_wp1_test_`-prefixed database and
-    /// applies every WP1 migration to it via the real Adapter connect path.
+    /// applies the embedded migration baseline via the real Adapter connect path.
     pub async fn setup() -> Self {
         let admin_url = admin_url();
         let name = format!("bamep_wp1_test_{}", Uuid::new_v4().simple());

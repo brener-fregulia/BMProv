@@ -1,13 +1,11 @@
-//! Component/Integration tests proving migration
-//! `0003_boot_context_and_credential_lookup.sql` (ADR-0014) exists as
-//! intended: `boot_contexts`, `endpoint_credential_lookups`, the
-//! `credential_slot_role` enum, and their constraints.
+//! Component/Integration tests for the final BootContext and credential-lookup
+//! baseline schema (ADR-0014): `boot_contexts`,
+//! `endpoint_credential_lookups`, the `credential_slot_role` enum, and their
+//! constraints.
 //!
-//! This is a schema-only checkpoint (no credential-routing, promotion, or
-//! Adapter behavior exists yet), so these tests assert PostgreSQL schema
-//! invariants directly via `information_schema`/`pg_catalog` and raw SQL —
-//! never Domain/Application credential business logic, which has no code
-//! path to these tables yet.
+//! These tests assert PostgreSQL schema invariants directly via
+//! `information_schema`/`pg_catalog` and raw SQL, independently of
+//! Domain/Application credential behavior.
 //!
 //! Requires a real, reachable PostgreSQL instance — see
 //! `support::TestDatabase`.

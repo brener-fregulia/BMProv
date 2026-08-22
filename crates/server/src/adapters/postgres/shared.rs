@@ -21,7 +21,7 @@ pub(super) fn to_backend_err(e: sqlx::Error) -> RepositoryError {
 }
 
 /// Adapter-local representation of the `endpoint_identity_state` PostgreSQL
-/// ENUM (migration `0002_closed_vocabulary_postgres_enums.sql`). Domain
+/// ENUM (`docs/development/persistence.md`, "Closed categorical values"). Domain
 /// (`bamep_domain::IdentityState`) stays free of SQLx/PostgreSQL derives —
 /// this type exists only to give SQLx a Postgres-typed value to bind/decode,
 /// mapped explicitly to/from Domain below.
@@ -98,7 +98,7 @@ impl From<&Actor> for PgAuditActorKind {
 }
 
 /// Adapter-local representation of the `credential_slot_role` PostgreSQL
-/// ENUM (migration `0003_boot_context_and_credential_lookup.sql`). Not a
+/// ENUM (`0001_initial_schema.sql`). Not a
 /// Domain type (`docs/development/persistence.md` "Closed categorical
 /// values"): `bamep_domain::credential::CredentialChain` only knows
 /// "predecessor" and "successor" as its two struct-level slots, never as a
@@ -111,7 +111,7 @@ pub(super) enum PgCredentialSlotRole {
 }
 
 /// Adapter-local representation of the `trusted_bootstrap_state` PostgreSQL
-/// ENUM (migration `0004_current_boot_and_trusted_bootstrap_state.sql`).
+/// ENUM (`0001_initial_schema.sql`).
 /// Domain (`bamep_domain::TrustedBootstrapState`) stays free of SQLx/
 /// PostgreSQL derives — mapped explicitly to/from Domain below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -228,7 +228,7 @@ macro_rules! endpoint_select {
 
 /// Reconstructs the Endpoint current-boot projection
 /// (`bamep_domain::CurrentBoot`) from its three SQL columns. PostgreSQL's own
-/// all-or-none `CHECK` constraint (migration `0004_...`) should already
+/// all-or-none `CHECK` constraint in the initial schema should already
 /// prevent a partially-populated row, but this Adapter mapping fails closed
 /// with `RepositoryError` on an inconsistent partial projection rather than
 /// trusting that constraint alone.
@@ -549,8 +549,8 @@ pub(super) async fn persist_lookup_projection(
 /// Adapter path reads `boot_contexts`.
 ///
 /// Fails closed with `RepositoryError` when the row's `boot_nonce` is `NULL`
-/// (a historical, pre-`0004_current_boot_and_trusted_bootstrap_state.sql`
-/// row): such a row is never fabricated or backfilled a nonce, and is
+/// (an unknown historical row represented by the nullable baseline column):
+/// such a row is never fabricated or backfilled a nonce, and is
 /// therefore never accepted as a valid new-flow `BootContext` — it cannot be
 /// redeemed through the current credential-redemption flow.
 pub(super) async fn load_boot_context_for_update(

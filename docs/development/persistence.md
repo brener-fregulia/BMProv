@@ -118,33 +118,79 @@ currently requires it.
 1. Schema changes use versioned SQL migrations.
 2. Migrations live under `crates/server/migrations/`.
 3. Do not hide schema evolution in Rust startup strings or ad-hoc `ALTER` logic.
-4. Use readable monotonic names, e.g. `0001_wp1_endpoint_enrollment.sql`,
-   `0002_add_boot_context.sql`.
-5. An applied/released migration is immutable. Never edit a historical
-   migration to change already-shipped schema behavior; create a new migration
-   instead.
-6. Migrations are forward-only as Bamep's normal production evolution policy. A
-   bad applied migration is repaired with a new forward migration rather than
-   relying on a production down-migration workflow.
-7. Migrations should be transactional by default when PostgreSQL supports the
+4. Use readable monotonic names, e.g. `0001_initial_schema.sql` and, after the
+   baseline is frozen, `0002_add_boot_context.sql`.
+5. Migrations should be transactional by default when PostgreSQL supports the
    operation.
-8. A deliberately non-transactional migration requires explicit justification
+6. A deliberately non-transactional migration requires explicit justification
    and appropriate validation.
-9. Server startup applies pending embedded migrations
+7. Server startup applies pending embedded migrations
    (`sqlx::migrate::Migrator`) before the Server becomes operational.
-10. Migration failure must fail startup clearly rather than allowing operation
+8. Migration failure must fail startup clearly rather than allowing operation
     on an incompatible partial schema.
-11. No external SQLx CLI should be required at Server runtime; migrations are
+9. No external SQLx CLI should be required at Server runtime; migrations are
     compiled in and applied by the Server itself.
-12. Constraints that protect durable invariants should exist in PostgreSQL when
+10. Constraints that protect durable invariants should exist in PostgreSQL when
     appropriate (`NOT NULL`, `UNIQUE`, foreign keys, `CHECK`, indexes), not only
     as Rust-side assumptions.
-13. Destructive or compatibility-sensitive migrations (`DROP`, incompatible
+11. Destructive or compatibility-sensitive migrations (`DROP`, incompatible
     type changes, large data rewrites, etc.) require explicit
     upgrade/backup/recovery consideration before implementation.
 
 Bamep does not yet have a specified production backup/version-retention policy;
 do not assume or invent one when writing a migration.
+
+### Pre-baseline development (current status)
+
+Bamep is currently constructing its initial migration baseline. There is no
+persistent pilot deployment, customer database, released Server schema, or
+supported schema-upgrade path that must be preserved.
+
+Until the baseline-freeze point defined below:
+
+* development and test databases are disposable;
+* existing development migrations may be edited, renamed, reordered,
+  consolidated, or removed;
+* schema corrections should normally be folded into the baseline instead of
+  creating artificial forward migrations;
+* compatibility with disposable local databases must not be preserved;
+* do not add backfills, dual-schema compatibility, or transitional security
+  behavior solely to preserve pre-baseline development data;
+* after the baseline migration changes, stale local development databases
+  should be dropped and recreated;
+* creating the complete schema in a fresh PostgreSQL database is the
+  authoritative validation target;
+* Git history preserves the development evolution; SQL migration history does
+  not need to duplicate that archaeology.
+
+Prefer a small, clean migration set that represents the schema Bamep actually
+intends to deploy. While the complete schema still belongs to the initial
+baseline, keep it in `0001_initial_schema.sql` rather than adding migrations
+merely because implementation happened incrementally.
+
+### Frozen migration history (future)
+
+The pre-baseline exception ends at the earliest of:
+
+1. the first persistent pilot or other non-disposable Bamep Server database
+   that Bamep intends to upgrade in place; or
+2. the first released Bamep version that establishes a supported persistent
+   database schema.
+
+At that explicit baseline-freeze point, every migration that may have been
+applied to a persistent supported database becomes immutable and migration
+history becomes append-only. Every later schema change receives a new
+monotonic migration. Released or applied migrations must not be edited,
+renamed, deleted, squashed, or otherwise changed in a way that alters their
+checksums. Forward upgrade compatibility becomes a product requirement; an
+applied migration is repaired through a new forward migration, and upgrade
+paths from supported prior states must be tested as those states begin to
+exist.
+
+This phase distinction does not weaken production migration discipline. It
+defines when that discipline begins: a clean rebased baseline during
+pre-baseline development, then immutable, append-only, forward-only migration
+history after the baseline is frozen.
 
 ## Migration testing
 
@@ -153,8 +199,9 @@ do not assume or invent one when writing a migration.
 * Migrations must apply cleanly to a fresh disposable test database.
 * Test databases must be isolated and safely disposable.
 * Do not use SQLite or in-memory behavior as proof of PostgreSQL behavior.
-* As released upgrade paths begin to exist, migrations should also be
-  validated from supported prior schema/release state to current state.
+* After the baseline is frozen and supported prior states exist, migrations
+  must also be validated from those supported schema/release states to the
+  current state.
 * Do not claim that upgrade-path testing already exists if it does not.
 
 ## SQL file line endings
@@ -173,6 +220,7 @@ Do not broadly change unrelated line-ending policy when working in this area.
 
 ## Guiding rule
 
-Keep the persistence layer boring: explicit SQL, relational-first modeling,
-versioned forward-only migrations, and a strict Adapter boundary that keeps
-SQLx and PostgreSQL specifics out of Domain and Application code.
+Keep the persistence layer boring: explicit SQL, relational-first modeling, a
+clean rebased migration baseline while pre-baseline, append-only forward
+migrations after baseline freeze, and a strict Adapter boundary that keeps SQLx
+and PostgreSQL specifics out of Domain and Application code.

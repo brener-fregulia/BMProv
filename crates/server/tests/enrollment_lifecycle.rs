@@ -134,7 +134,7 @@ async fn total_endpoint_count(pool: &PgPool) -> i64 {
 
 async fn identity_state(pool: &PgPool, endpoint_id: EndpointId) -> String {
     // `identity_state` is a native `endpoint_identity_state` PostgreSQL ENUM
-    // (migration 0002) — cast to `text` so this assertion helper can keep
+    // — cast to `text` so this assertion helper can keep
     // comparing against the plain textual label.
     sqlx::query_scalar("SELECT identity_state::text FROM endpoints WHERE id = $1")
         .bind(endpoint_id.0)
@@ -224,10 +224,8 @@ async fn migrations_apply_cleanly_to_a_fresh_database() {
     db.teardown().await;
 }
 
-/// Confirms migration `0002_closed_vocabulary_postgres_enums.sql` actually
-/// converted the three closed-vocabulary columns to their intended
-/// user-defined PostgreSQL ENUM types, not merely to some other non-`TEXT`
-/// representation.
+/// Confirms the baseline's closed-vocabulary columns use their intended
+/// user-defined PostgreSQL ENUM types, not another non-`TEXT` representation.
 #[tokio::test]
 async fn closed_vocabulary_columns_use_native_postgres_enum_types() {
     let db = TestDatabase::setup().await;
@@ -1419,9 +1417,9 @@ async fn historical_boot_context_with_null_nonce_fails_closed_on_redemption() {
     let db = TestDatabase::setup().await;
     let (_boot, enrollment, clock) = build_services(db.pool.clone());
 
-    // Simulates a pre-migration-0004 historical BootContext row: real,
-    // schema-valid columns, but NULL boot_nonce — exactly what migration
-    // 0004 leaves existing rows as (no fabricated/backfilled nonce).
+    // Simulates an unknown historical BootContext row: real, schema-valid
+    // columns, but NULL boot_nonce. The nullable baseline representation keeps
+    // such rows fail-closed without fabricating or backfilling a nonce.
     // Inserted directly against the schema, not through
     // BootOrchestrationService, which always supplies a non-NULL nonce for
     // newly issued BootContexts.
